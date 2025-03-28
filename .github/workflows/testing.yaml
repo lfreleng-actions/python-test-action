@@ -27,19 +27,45 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Perform setup prior to running test(s)
-      - name: "Testing setup step"
-        shell: bash
-        run: |
-          # Testing setup step
-          echo "Testing setup step"
-          echo "Testing setup step/summary output" >> "$GITHUB_STEP_SUMMARY"
+      - name: "Checkout sample project repository"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: "lfreleng-actions/test-python-project"
+          path: "test-python-project"
 
-      - name: "Running local action: ${{ github.repository }}"
+      # Build sample Python project
+      - name: "Build Python project"
+        id: build
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-build-action@759476bd3c476c1d16aae50ebddce1512ec290af # v0.1.1
+        with:
+          path_prefix: "test-python-project/"
+          tox_build: false
+
+      # Perform Python project standard tests
+      - name: "Run action: ${{ github.repository }} [Regular Tests]"
         uses: ./
+        with:
+          python_version: "${{ steps.build.outputs.build_python_version }}"
+          path_prefix: "test-python-project/"
+          tests_path: "tests"
 
-      - name: "Validating local action: ${{ github.repository }}"
-        shell: bash
-        run: |
-          # Local action validation
-          echo "Validating local action: ${{ github.repository }}"
-          echo "Validation step summary output" >> "$GITHUB_STEP_SUMMARY"
+      # Perform Python project failing tests
+      - name: "Run action: ${{ github.repository }} [Failing Test]"
+        uses: ./
+        # Test permit failure using continue-on-error
+        continue-on-error: true
+        with:
+          python_version: "${{ steps.build.outputs.build_python_version }}"
+          path_prefix: "test-python-project/"
+          tests_path: "tests_fail"
+
+      # Perform Python project failing tests
+      - name: "Run action: ${{ github.repository }} [Failing Test]"
+        uses: ./
+        with:
+          python_version: "${{ steps.build.outputs.build_python_version }}"
+          path_prefix: "test-python-project/"
+          tests_path: "tests_fail"
+          # Test permit failure using action input
+          permit_fail: true
