@@ -41,8 +41,16 @@ runs:
       shell: bash
       run: |
         # Setup action/environment
-        if [ -n "${{ inputs.path_prefix }}" ] && \
-          [ ! -d "${{ inputs.path_prefix }}" ]; then
+        if [ -z "${{ inputs.python_version }}" ]; then
+          echo "Error: Python version was not provided ❌"
+          exit 1
+        else
+          echo "Using Python: ${{ inputs.python_version }} 🐍"
+        fi
+
+        path_prefix="${{ inputs.path_prefix }}"
+        if [ -n "$path_prefix" ] && \
+          [ ! -d "$path_prefix" ]; then
           echo "Error: invalid path/prefix to project directory ❌"
           exit 1
         fi
@@ -52,29 +60,32 @@ runs:
           echo "${{ inputs.path_prefix }}${{ inputs.tests_path }}"
           exit 1
         fi
-        PERMIT_FAIL=$(echo "${{ inputs.PERMIT_FAIL }}" |\
+        permit_fail=$(echo "${{ inputs.permit_fail }}" |\
         tr '[:upper:]' '[:lower:]')
-        if [ "f$PERMIT_FAIL" = "ftrue" ]; then
+        if [ "f$permit_fail" = "ftrue" ]; then
           echo "permit_fail=true" >> "$GITHUB_ENV"
         fi
 
         # Install modules required for testing
         echo "Installing test tooling: pytest, pytest-cov ⬇️"
         python -m pip install --disable-pip-version-check -q pytest pytest-cov
+
         echo "Installing project and dependencies"
-        if [ -f "${{ inputs.path_prefix }}pyproject.toml" ]; then
-          echo "Source: ${{ inputs.path_prefix }}pyproject.toml ⬇️"
-          pip install -q "${{ inputs.path_prefix }}"
-        fi
-        if [ -f "${{ inputs.path_prefix }}requirements.txt" ]; then
+        # Note: quirks with pip install need careful handling
+
+        if [ -f "$path_prefix"pyproject.toml ]; then
+          echo "Source: ${path_prefix%/} ⬇️"
+          pip install -q "$path_prefix"
+          # Note: Not to be confused with the option below
+          # This would trigger a second build of the project
+          # pip install -q ${path_prefix%/}
+        elif [ -z "$path_prefix" ] && \
+          [ -f pyproject.toml ]; then
+            echo "Source: pyproject.toml ⬇️"
+            pip install -q .
+        elif [ -f "${{ inputs.path_prefix }}requirements.txt" ]; then
           echo "Source: ${{ inputs.path_prefix }}requirements.txt ⬇️"
           pip install -q -r "${{ inputs.path_prefix }}requirements.txt"
-        fi
-        if [ -z "${{ inputs.python_version }}" ]; then
-          echo "Error: Python version was not provided ❌"
-          exit 1
-        else
-          echo "Using Python: ${{ inputs.python_version }} 🐍"
         fi
 
         # Setup test path
@@ -120,9 +131,9 @@ runs:
       shell: bash
       run: |
         # Create ZIP archive of coverage report
-        REPORT_ARTEFACT=$(echo ${{ inputs.REPORT_ARTEFACT }} |\
+        report_artefact=$(echo ${{ inputs.report_artefact }} |\
         tr '[:upper:]' '[:lower:]')
-        if [ "f$REPORT_ARTEFACT" = "ftrue" ]; then
+        if [ "f$report_artefact" = "ftrue" ]; then
           if [ -d coverage_report ]; then
             echo "Creating ZIP file of HTML coverage report"
             zip -r test_coverage_report-${{ inputs.python_version }}.zip \
@@ -131,7 +142,7 @@ runs:
             echo "No coverage report directory exists"
           fi
         fi
-        echo "report_artefact=$REPORT_ARTEFACT" >> "$GITHUB_ENV"
+        echo "report_artefact=$report_artefact" >> "$GITHUB_ENV"
 
     - name: "Upload test/coverage report"
       # yamllint disable-line rule:line-length
