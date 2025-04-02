@@ -59,6 +59,7 @@ jobs:
           python_version: "${{ steps.build.outputs.build_python_version }}"
           path_prefix: "test-python-project/"
           tests_path: "tests_fail"
+          report_artefact: false
 
       # Perform Python project failing tests
       - name: "Run action: ${{ github.repository }} [Failing Test]"
@@ -69,3 +70,17 @@ jobs:
           tests_path: "tests_fail"
           # Test permit failure using action input
           permit_fail: true
+          report_artefact: false
+
+      # Enable when test-python-project tests location is fixed in tox.ini
+
+      # Perform Python project testing with tox
+      # - name: "Run action: ${{ github.repository }} [TOX Tests]"
+      #   uses: ./
+      #   with:
+      #     python_version: "${{ steps.build.outputs.build_python_version }}"
+      #     path_prefix: "test-python-project/"
+      #     report_artefact: false
+      #     tox_tests: true
+      #     # Do not run TOX linting when "no-commit-to-branch" enabled
+      #     tox_envs: "tests"
