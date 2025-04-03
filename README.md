@@ -7,6 +7,11 @@
 
 Tests a Python project and generates coverage reports.
 
+There are two ways for tests to run:
+
+- Using pytest and pytest-cov to run tests and generate coverage reports
+- Using tox when provided with a suitable configuration file
+
 ## python-test-action
 
 ## Usage Example
@@ -43,17 +48,19 @@ Note: build your project before invoking tests (not shown above)
 
 <!-- markdownlint-disable MD013 -->
 
-| Variable Name   | Required | Default    | Description                                          |
-| --------------- | -------- | ---------- | ---------------------------------------------------- |
-| PYTHON_VERSION  | True     |            | Python version used to run test                      |
-| PERMIT_FAIL     | False    | False      | Continue even when one or more tests fails           |
-| REPORT_ARTEFACT | False    | False      | Uploads test/coverage report bundle as artefact      |
-| PATH_PREFIX     | False    |            | Directory location containing Python project code    |
-| TESTS_PATH      | False    | tests/test | Path relative to the project folder containing tests |
+| Variable Name   | Required | Default      | Description                                          |
+| --------------- | -------- | ------------ | ---------------------------------------------------- |
+| PYTHON_VERSION  | True     |              | Python version used to run tests                     |
+| PERMIT_FAIL     | False    | False        | Continue even when one or more tests fail            |
+| REPORT_ARTEFACT | False    | True         | Uploads test/coverage report bundle as artefact      |
+| PATH_PREFIX     | False    |              | Directory location containing Python project code    |
+| TESTS_PATH      | False    | test/tests   | Path relative to the project folder containing tests |
+| TOX_TESTS       | False    | False        | Uses tox to perform Python tests (requires tox.ini)  |
+| TOX_ENVS        | False    | "lint tests" | Space separated list of tox environment names to run |
 
 <!-- markdownlint-enable MD013 -->
 
 ## Coverage Reports
 
-The action will create HTML coverage reports as ZIP file bundles. Set
-REPORT_ARTEFACT true to upload them to GitHub as artefacts.
+The embedded pytest behaviour will create HTML coverage reports as ZIP file
+bundles. Set REPORT_ARTEFACT true to also upload them to GitHub as artefacts.
