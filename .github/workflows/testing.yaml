@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Action test/validation workflow
-name: "Test GitHub Action 🧪"
+name: "GitHub Action"
 
 # yamllint disable-line rule:truthy
 on:
@@ -18,7 +18,7 @@ permissions: {}
 jobs:
   ### Test the GitHub Action in this Repository ###
   tests:
-    name: "Test local GitHub Action"
+    name: "Run Tests 🧪"
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -43,26 +43,25 @@ jobs:
           tox_build: false
 
       # Perform Python project standard tests
-      - name: "Run action: ${{ github.repository }} [Regular Tests]"
+      - name: "Run action: ${{ github.repository }} [PYTEST]"
         uses: ./
         with:
           python_version: "${{ steps.build.outputs.build_python_version }}"
           path_prefix: "test-python-project/"
           tests_path: "tests"
 
-      # Perform Python project failing tests
-      - name: "Run action: ${{ github.repository }} [Failing Test]"
+      # Perform Python project standard tests
+      - name: "Run action: ${{ github.repository }} [TOX]"
         uses: ./
-        # Test permit failure using continue-on-error
-        continue-on-error: true
         with:
           python_version: "${{ steps.build.outputs.build_python_version }}"
           path_prefix: "test-python-project/"
-          tests_path: "tests_fail"
+          tests_path: "tests"
+          tox_tests: "true"
           report_artefact: false
 
       # Perform Python project failing tests
-      - name: "Run action: ${{ github.repository }} [Failing Test]"
+      - name: "Run action: ${{ github.repository }} [Test Failure]"
         uses: ./
         with:
           python_version: "${{ steps.build.outputs.build_python_version }}"
@@ -71,16 +70,3 @@ jobs:
           # Test permit failure using action input
           permit_fail: true
           report_artefact: false
-
-      # Enable when test-python-project tests location is fixed in tox.ini
-
-      # Perform Python project testing with tox
-      # - name: "Run action: ${{ github.repository }} [TOX Tests]"
-      #   uses: ./
-      #   with:
-      #     python_version: "${{ steps.build.outputs.build_python_version }}"
-      #     path_prefix: "test-python-project/"
-      #     report_artefact: false
-      #     tox_tests: true
-      #     # Do not run TOX linting when "no-commit-to-branch" enabled
-      #     tox_envs: "tests"

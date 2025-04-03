@@ -41,7 +41,6 @@ inputs:
     description: "Space separated list of tox environments to run"
     required: false
     type: string
-    default: "lint tests"
 
 runs:
   using: "composite"
@@ -75,12 +74,13 @@ runs:
           echo "Warning: test failures will be permitted ⚠️"
         fi
 
+        # Testing with TOX
         if [ "f${{ inputs.TOX_TESTS }}" = "ftrue" ]; then
           echo "Using tox to perform tests 💬"
           if [ -z "${{ inputs.TOX_ENVS }}" ]; then
-            echo "Error: no tox environments were specified ❌"; exit 1
+            echo "Warning: testing with tox but no environments specified ⚠️"
           else
-            echo "Tox environments: ${{ inputs.TOX_ENVS }} 💬"
+            echo "Testing with tox; environments: ${{ inputs.TOX_ENVS }} 💬"
           fi
         fi
 
@@ -132,10 +132,14 @@ runs:
         # Performing tests [tox]
         echo "Installing: tox ⬇️"
         pip install --disable-pip-version-check -q tox
-        for ENV in ${{ inputs.TOX_ENVS }}; do
-          echo "Running: tox -c ${{ env.path_prefix }}/tox.ini -e $ENV 💬"
-          tox -c ${{ env.path_prefix }}/tox.ini -e "$ENV"
-        done
+        if [ -z "${{ inputs.TOX_ENVS }}" ]; then
+          for ENV in ${{ inputs.TOX_ENVS }}; do
+            echo "Running: tox -c ${{ env.path_prefix }}/tox.ini -e $ENV 💬"
+            tox -c ${{ env.path_prefix }}/tox.ini -e "$ENV"
+          done
+        else
+          echo "Running: tox -c ${{ env.path_prefix }}/tox.ini 💬"
+        fi
 
     - name: "Tests and coverage report [pytest]"
       if: inputs.TOX_TESTS != 'true'
@@ -173,7 +177,12 @@ runs:
           zip -r test_coverage_report-${{ inputs.PYTHON_VERSION }}.zip \
             coverage_report
         else
-          echo "No coverage report directory exists"
+          if [ "f${{ inputs.permit_fail }}" = 'ftrue' ]; then
+            echo "Error: coverage report requested but no content found ⚠️"
+          else
+            echo "Error: coverage report requested but no content found ❌"
+            exit 1
+          fi
         fi
 
     - name: "Upload test/coverage report"
