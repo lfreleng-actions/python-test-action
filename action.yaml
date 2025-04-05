@@ -107,7 +107,7 @@ runs:
       if: inputs.TOX_TESTS == 'true'
       id: tox-config
       # yamllint disable-line rule:line-length
-      uses: lfreleng-actions/path-check-action@554ef2267e6810ab7ac56506c8c1fd00725d59b1 # v0.1.0
+      uses: lfreleng-actions/path-check-action@ef6cb64d8851552e1290d7e535d00380ce1f5112 # v0.1.2
       with:
         path: "${{ env.path_prefix }}/tox.ini"
 
