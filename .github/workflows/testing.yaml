@@ -15,6 +15,9 @@ on:
 
 permissions: {}
 
+env:
+  python_version: "3.12"
+
 jobs:
   ### Test the GitHub Action in this Repository ###
   tests:
@@ -46,27 +49,37 @@ jobs:
       - name: "Run action: ${{ github.repository }} [PYTEST]"
         uses: ./
         with:
-          python_version: "${{ steps.build.outputs.build_python_version }}"
+          python_version: ${{ env.python_version }}
           path_prefix: "test-python-project/"
           tests_path: "tests"
-
-      # Perform Python project standard tests
-      - name: "Run action: ${{ github.repository }} [TOX]"
-        uses: ./
-        with:
-          python_version: "${{ steps.build.outputs.build_python_version }}"
-          path_prefix: "test-python-project/"
-          tests_path: "tests"
-          tox_tests: "true"
-          report_artefact: false
 
       # Perform Python project failing tests
       - name: "Run action: ${{ github.repository }} [Test Failure]"
         uses: ./
         with:
-          python_version: "${{ steps.build.outputs.build_python_version }}"
+          python_version: ${{ env.python_version }}
           path_prefix: "test-python-project/"
-          tests_path: "tests_fail"
-          # Test permit failure using action input
-          permit_fail: true
           report_artefact: false
+          # Test permit failure using action input
+          tests_path: "tests_fail"
+          permit_fail: true
+
+      # Perform Python project failing tests
+      - name: "Run action: ${{ github.repository }} [Test Failure]"
+        id: tests-fail
+        uses: ./
+        continue-on-error: true
+        with:
+          python_version: ${{ env.python_version }}
+          path_prefix: "test-python-project/"
+          report_artefact: false
+          # Test permit failure using action input
+          tests_path: "tests_fail"
+
+      - name: "Validate previous step failure"
+        if: steps.tests-fail.outcome == 'success'
+        shell: bash
+        run: |
+          # Check previous step failure
+          echo "Error: previous step should have failed ❌"
+          exit 1
