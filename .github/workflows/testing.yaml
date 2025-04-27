@@ -83,3 +83,31 @@ jobs:
           # Check previous step failure
           echo "Error: previous step should have failed ❌"
           exit 1
+
+      # Perform Python project standard tests
+      - name: "Run action: ${{ github.repository }} [Codecov/No token]"
+        id: codecov-notoken
+        uses: ./
+        with:
+          python_version: ${{ env.python_version }}
+          path_prefix: "test-python-project/"
+          tests_path: "tests"
+          codecov_report: true
+
+      - name: "Validate previous step failure"
+        if: steps.codecov-notoken.outcome == 'success'
+        shell: bash
+        run: |
+          # Check previous step failure
+          echo "Error: previous step should have failed ❌"
+          exit 1
+
+      # Perform Python tests with codecov report
+      - name: "Run action: ${{ github.repository }} [Codecov report]"
+        uses: ./
+        with:
+          python_version: ${{ env.python_version }}
+          path_prefix: "test-python-project/"
+          tests_path: "tests"
+          codecov_report: true
+          codecov_token: "${{ secrets.CODECOV_TOKEN }}"

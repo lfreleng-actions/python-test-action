@@ -41,11 +41,23 @@ inputs:
     description: "Space separated list of tox environments to run"
     required: false
     type: string
+  CODECOV_REPORT:
+    # Note: by default uses CODECOV_TOKEN in the GitHub environment
+    description: "Upload test coverage using Codecov CLI"
+    required: false
+    type: boolean
+    default: false
+  CODECOV_TOKEN:
+    # Optionally pass a token in explicitly, e.g. from 1Password
+    description: "Token to use for Codecov upload"
+    required: false
+    type: 'string'
 
 runs:
   using: "composite"
   steps:
     - name: "Setup action/environment"
+      id: setup
       shell: bash
       run: |
         # Setup action/environment
@@ -152,10 +164,11 @@ runs:
         echo "Install project and dependencies"
         if [ -f ${{ env.path_prefix }}/pyproject.toml ]; then
             echo "Source: ${{ env.path_prefix }}/pyproject.toml ⬇️"
-            pip install -q "${{ env.path_prefix }}/"
+            pip install --disable-pip-version-check -q "${{ env.path_prefix }}/"
         elif [ -f ${{ env.path_prefix }}/requirements.txt ]; then
           echo "Source: ${{ env.path_prefix }}/requirements.txt ⬇️"
-          pip install -q -r "${{ env.path_prefix }}/requirements.txt"
+          pip install --disable-pip-version-check \
+            -q -r "${{ env.path_prefix }}/requirements.txt"
         fi
 
         echo "Running tests in: ${{ env.tests_path }} 🧪"
@@ -193,3 +206,31 @@ runs:
         name: test_coverage_report-${{ inputs.python_version }}.zip
         path: test_coverage_report-${{ inputs.python_version }}.zip
         retention-days: 90
+
+    - name: "Upload Codecov report"
+      # yamllint disable-line rule:line-length
+      if: inputs.CODECOV_REPORT == 'disabled'
+      shell: bash
+      run: |
+        # Upload Codecov report
+        echo "Installing: codecov_cli ⬇️"
+        pip install --disable-pip-version-check -q codecov_cli
+        if [ -n "${{ inputs.CODECOV_TOKEN }}" ]; then
+          codecovcli upload-process -t "${{ inputs.CODECOV_TOKEN }}"
+        else
+          codecovcli upload-process
+        fi
+        if [ $? -eq 0 ] then
+          echo "## Codecov Report Created 📄" >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "## Codecov Report Failed ❌" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: 'Upload Codecov report'
+      # yamllint disable-line rule:line-length
+      uses: codecov/codecov-action@ad3126e916f78f00edff4ed0317cf185271ccc2d # v5.4.2
+      if: inputs.CODECOV_REPORT == 'true'
+      with:
+        fail_ci_if_error: true # optional (default = false)
+        token: ${{ inputs.CODECOV_TOKEN }}
+        verbose: true

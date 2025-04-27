@@ -57,6 +57,8 @@ Note: build your project before invoking tests (not shown above)
 | TESTS_PATH      | False    | test/tests   | Path relative to the project folder containing tests |
 | TOX_TESTS       | False    | False        | Uses tox to perform Python tests (requires tox.ini)  |
 | TOX_ENVS        | False    | "lint tests" | Space separated list of tox environment names to run |
+| CODECOV_REPORT  | False    | false        | Upload codecov report when testing complete          |
+| CODECOV_TOKEN   | False    |              | Codecov API token for upload authentication          |
 
 <!-- markdownlint-enable MD013 -->
 
