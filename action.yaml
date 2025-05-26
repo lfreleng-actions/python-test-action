@@ -3,82 +3,82 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # python-test-action
-name: "🧪 Python Test"
-description: "Test a Python Project, generate coverage report"
+name: '🧪 Python Test'
+description: 'Test a Python Project, generate coverage report'
 
 inputs:
   # Mandatory
-  PYTHON_VERSION:
+  python_version:
     # A matrix Python build version should be passed as input
-    description: "Python version used to run test"
+    description: 'Python version used to run test'
     required: true
     type: string
   # Optional
-  PERMIT_FAIL:
-    description: "Continue even when one or more tests fails"
+  permit_fail:
+    description: 'Continue even when one or more tests fails'
     required: false
     type: boolean
     default: false
-  REPORT_ARTEFACT:
-    description: "Uploads test/coverage report bundle as artefact"
+  report_artefact:
+    description: 'Uploads test/coverage report bundle as artefact'
     required: false
     type: boolean
     default: true
-  PATH_PREFIX:
-    description: "Directory location containing Python project code"
+  path_prefix:
+    description: 'Directory location containing Python project code'
     type: string
     required: false
-  TESTS_PATH:
-    description: "Path relative to the project folder containing tests"
+  tests_path:
+    description: 'Path relative to the project folder containing tests'
     required: false
     type: string
-  TOX_TESTS:
-    description: "Uses tox to perform tests"
+  tox_tests:
+    description: 'Uses tox to perform tests'
     required: false
     type: boolean
     default: false
-  TOX_ENVS:
-    description: "Space separated list of tox environments to run"
+  tox_envs:
+    description: 'Space separated list of tox environments to run'
     required: false
     type: string
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
-    - name: "Setup action/environment"
+    - name: 'Setup action/environment'
       shell: bash
       run: |
         # Setup action/environment
         if [ -z "${{ inputs.python_version }}" ]; then
-          echo "Error: Python version was not provided ❌"; exit 1
+          echo 'Error: Python version was not provided ❌'; exit 1
         else
           echo "Using Python: ${{ inputs.python_version }} 🐍"
         fi
 
         # Handle path_prefix input consistently and when absent
-        path_prefix="${{ inputs.PATH_PREFIX }}"
+        path_prefix="${{ inputs.path_prefix }}"
         if [ -z "$path_prefix" ]; then
           # Set current directory as path prefix
-          path_prefix="."
+          path_prefix='.'
         else
-          # Strip any trailing slash in provided path
+          # Strip any trailing slash in provided path
           path_prefix="${path_prefix%/}"
         fi
         # Verify is a valid directory path
         if [ ! -d "$path_prefix" ]; then
-          echo "Error: invalid path/prefix to project directory ❌"; exit 1
+          echo 'Error: invalid path/prefix to project directory ❌'; exit 1
         fi
         echo "path_prefix=$path_prefix" >> "$GITHUB_ENV"
 
-        if [ "f${{ inputs.PERMIT_FAIL }}" = "ftrue" ]; then
-          echo "Warning: test failures will be permitted ⚠️"
+        if [ "f${{ inputs.permit_fail }}" = 'ftrue' ]; then
+          echo 'Warning: test failures will be permitted ⚠️'
         fi
 
         # Testing with TOX
-        if [ "f${{ inputs.TOX_TESTS }}" = "ftrue" ]; then
-          echo "Using tox to perform tests 💬"
+        if [ "f${{ inputs.tox_tests }}" = 'ftrue' ]; then
+          echo 'Using tox to perform tests 💬'
           if [ -z "${{ inputs.TOX_ENVS }}" ]; then
-            echo "Warning: testing with tox but no environments specified ⚠️"
+            echo 'Warning: testing with tox but no environments specified ⚠️'
           else
             echo "Testing with tox; environments: ${{ inputs.TOX_ENVS }} 💬"
           fi
@@ -87,109 +87,131 @@ runs:
         # Check/setup test path
         if [ -n "${{ inputs.tests_path }}" ] && \
           [ ! -d "$path_prefix/${{ inputs.tests_path }}" ]; then
-          echo "Error: invalid path/prefix to test directory ❌"
+          echo 'Error: invalid path/prefix to test directory ❌'
           echo "$path_prefix/${{ inputs.tests_path }}"; exit 1
         fi
         if [ -n "${{ inputs.tests_path }}" ]; then
           TESTS_PATH="$path_prefix/${{ inputs.tests_path }}"
-        # Otherwise search/use common locations
+        # Otherwise search/use common locations
         elif [ -d "$path_prefix/test" ]; then
           TESTS_PATH="$path_prefix/test"
         elif [ -d "$path_prefix/tests" ]; then
           TESTS_PATH="$path_prefix/tests"
         else
-          echo "Error: could not determine path to tests ❌"; exit 1
+          echo 'Error: could not determine path to tests ❌'; exit 1
         fi
-        echo "Tests path: $TESTS_PATH 💬"
+        echo 'Tests path: $TESTS_PATH 💬'
         echo "tests_path=$TESTS_PATH" >> "$GITHUB_ENV"
 
-    - name: "Check for tox configuration file"
-      if: inputs.TOX_TESTS == 'true'
+    - name: 'Check for tox configuration file'
+      if: inputs.tox_tests == 'true'
       id: tox-config
       # yamllint disable-line rule:line-length
       uses: lfreleng-actions/path-check-action@594fa4a73651e3e869a4829397e878932f7db32c # v0.1.4
       with:
         path: "${{ env.path_prefix }}/tox.ini"
 
-    - name: "Tox configuration file missing"
+    - name: 'Tox configuration file missing'
       # yamllint disable-line rule:line-length
-      if: steps.tox-config.outputs.type != 'file' && inputs.TOX_TESTS == 'true'
+      if: steps.tox-config.outputs.type != 'file' && inputs.tox_tests == 'true'
       shell: bash
       run: |
         # Tox configuration file missing
-        echo "Error: tox configuration file missing ❌"; exit 1
+        echo 'Error: tox configuration file missing ❌'; exit 1
 
     - name: "Set up Python ${{ inputs.python_version }}"
       # yamllint disable-line rule:line-length
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
-        python-version: ${{ inputs.python_version }}
+        python-version: "${{ inputs.python_version }}"
 
-    - name: "Performing tests [tox]"
-      if: steps.tox-config.outputs.type == 'file' && inputs.TOX_TESTS == 'true'
+    - name: 'Performing tests [tox]'
+      if: steps.tox-config.outputs.type == 'file' && inputs.tox_tests == 'true'
       shell: bash
       run: |
         # Performing tests [tox]
-        echo "Installing: tox ⬇️"
-        pip install --disable-pip-version-check -q tox
-        if [ -z "${{ inputs.TOX_ENVS }}" ]; then
-          for ENV in ${{ inputs.TOX_ENVS }}; do
+        echo 'Installing: tox ⬇️'
+        # Under Python 3.8, use a compatible tox release, latest for others
+        if [[ "${{ inputs.python_version }}" == "3.8" ]]; then
+          echo 'Using tox<4.0.0 for Python 3.8 compatibility'
+          pip install --disable-pip-version-check -q 'tox<4.0.0'
+        else
+          echo 'Using latest tox version'
+          pip install --disable-pip-version-check -q tox
+        fi
+        if [ -n "${{ inputs.TOX_ENVS }}" ]; then
+          for ENV in "${{ inputs.TOX_ENVS }}"; do
             echo "Running: tox -c ${{ env.path_prefix }}/tox.ini -e $ENV 💬"
-            tox -c ${{ env.path_prefix }}/tox.ini -e "$ENV"
+            tox -c "${{ env.path_prefix }}/tox.ini" -e "$ENV"
           done
         else
-          echo "Running: tox -c ${{ env.path_prefix }}/tox.ini 💬"
+          echo 'Running: tox -c ${{ env.path_prefix }}/tox.ini 💬'
+          tox -c "${{ env.path_prefix }}/tox.ini"
         fi
 
-    - name: "Tests and coverage report [pytest]"
-      if: inputs.TOX_TESTS != 'true'
+    - name: 'Install project and test/dev dependencies [pytest]'
+      if: inputs.tox_tests != 'true'
+      shell: bash
+      run: |
+        # Install project and test/dev dependencies
+        echo 'Installing: pytest, pytest-cov ⬇️'
+        pip install --disable-pip-version-check -q pytest pytest-cov
+
+        echo 'Install project and test/dev dependencies'
+        if [ -f "${{ env.path_prefix }}/pyproject.toml" ]; then
+          echo "Source: ${{ env.path_prefix }}/pyproject.toml ⬇️"
+          # First try to install with test dependencies
+          if pip install -e "${{ env.path_prefix }}[test,dev]"; then
+            echo 'Successfully installed test and dev dependencies ✅'
+          elif pip install -e "${{ env.path_prefix }}[test]"; then
+            echo 'Successfully installed test dependencies ✅'
+          else
+            echo 'Fallback: installing base package only ⚠️'
+            pip install -e "${{ env.path_prefix }}"
+          fi
+        elif [ -f "${{ env.path_prefix }}/requirements.txt" ]; then
+          echo "Source: ${{ env.path_prefix }}/requirements.txt ⬇️"
+          pip install -r "${{ env.path_prefix }}/requirements.txt"
+        fi
+
+    - name: 'Run tests and coverage report [pytest]'
+      if: inputs.tox_tests != 'true'
       shell: bash
       run: |
         # Tests and coverage report [pytest]
-        echo "Installing: pytest, pytest-cov ⬇️"
-        pip install --disable-pip-version-check -q pytest pytest-cov
-
-        echo "Install project and dependencies"
-        if [ -f ${{ env.path_prefix }}/pyproject.toml ]; then
-            echo "Source: ${{ env.path_prefix }}/pyproject.toml ⬇️"
-            pip install -q "${{ env.path_prefix }}/"
-        elif [ -f ${{ env.path_prefix }}/requirements.txt ]; then
-          echo "Source: ${{ env.path_prefix }}/requirements.txt ⬇️"
-          pip install -q -r "${{ env.path_prefix }}/requirements.txt"
-        fi
-
         echo "Running tests in: ${{ env.tests_path }} 🧪"
         if [ "f${{ inputs.permit_fail }}" = 'ftrue' ]; then
-          echo "Warning: flag set to permit test failures ⚠️"
+          echo 'Warning: flag set to permit test failures ⚠️'
           pytest --cov --cov-report=html:coverage_report \
-            ${{ env.tests_path }} || true
+            "${{ env.tests_path }}" || true
         else
-          pytest --cov --cov-report=html:coverage_report ${{ env.tests_path }}
+          pytest --cov --cov-report=html:coverage_report "${{ env.tests_path }}"
         fi
 
-    - name: "Create ZIP archive of coverage report"
-      if: inputs.REPORT_ARTEFACT == 'true'
+    - name: 'Create ZIP archive of coverage report'
+      if: inputs.report_artefact == 'true'
       shell: bash
       run: |
         # Create ZIP archive of coverage report
         if [ -d coverage_report ]; then
-          echo "Creating ZIP file of HTML coverage report"
-          zip -r test_coverage_report-${{ inputs.PYTHON_VERSION }}.zip \
+          echo 'Creating ZIP file of HTML coverage report'
+          zip -r \
+            "test_coverage_report-${{ inputs.python_version }}.zip" \
             coverage_report
         else
           if [ "f${{ inputs.permit_fail }}" = 'ftrue' ]; then
-            echo "Error: coverage report requested but no content found ⚠️"
+            echo 'Error: coverage report requested but no content found ⚠️'
           else
-            echo "Error: coverage report requested but no content found ❌"
+            echo 'Error: coverage report requested but no content found ❌'
             exit 1
           fi
         fi
 
-    - name: "Upload test/coverage report"
+    - name: 'Upload test/coverage report'
       # yamllint disable-line rule:line-length
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-      if: inputs.REPORT_ARTEFACT == 'true'
+      if: inputs.report_artefact == 'true'
       with:
-        name: test_coverage_report-${{ inputs.python_version }}.zip
-        path: test_coverage_report-${{ inputs.python_version }}.zip
+        name: "test_coverage_report-${{ inputs.python_version }}.zip"
+        path: "test_coverage_report-${{ inputs.python_version }}.zip"
         retention-days: 90
