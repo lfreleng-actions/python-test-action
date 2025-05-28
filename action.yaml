@@ -100,7 +100,7 @@ runs:
         else
           echo 'Error: could not determine path to tests ❌'; exit 1
         fi
-        echo 'Tests path: $TESTS_PATH 💬'
+        echo "Tests path: $TESTS_PATH 💬"
         echo "tests_path=$TESTS_PATH" >> "$GITHUB_ENV"
 
     - name: 'Check for tox configuration file'
