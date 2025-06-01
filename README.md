@@ -50,13 +50,13 @@ Note: build your project before invoking tests (not shown above)
 
 | Variable Name   | Required | Default      | Description                                          |
 | --------------- | -------- | ------------ | ---------------------------------------------------- |
-| PYTHON_VERSION  | True     |              | Python version used to run tests                     |
-| PERMIT_FAIL     | False    | False        | Continue even when one or more tests fail            |
-| REPORT_ARTEFACT | False    | True         | Uploads test/coverage report bundle as artefact      |
-| PATH_PREFIX     | False    |              | Directory location containing Python project code    |
-| TESTS_PATH      | False    | test/tests   | Path relative to the project folder containing tests |
-| TOX_TESTS       | False    | False        | Uses tox to perform Python tests (requires tox.ini)  |
-| TOX_ENVS        | False    | "lint tests" | Space separated list of tox environment names to run |
+| python_version  | True     |              | Python version used to run tests                     |
+| permit_fail     | False    | False        | Continue even when one or more tests fail            |
+| report_artefact | False    | True         | Uploads test/coverage report bundle as artefact      |
+| path_prefix     | False    |              | Directory location containing Python project code    |
+| tests_path      | False    | test/tests   | Path relative to the project folder containing tests |
+| tox_tests       | False    | False        | Uses tox to perform Python tests (requires tox.ini)  |
+| tox_envs        | False    | "lint tests" | Space separated list of tox environment names to run |
 
 <!-- markdownlint-enable MD013 -->
 
