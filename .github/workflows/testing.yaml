@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Action test/validation workflow
-name: "GitHub Action"
+name: "Test GitHub Action 🧪"
 
 # yamllint disable-line rule:truthy
 on:
@@ -42,7 +42,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: lfreleng-actions/python-build-action@a9d0ef8a2324ac76e798ad6dc306f08b83b5b213 # v0.1.11
         with:
-          path_prefix: "test-python-project/"
+          path_prefix: "test-python-project"
           tox_build: false
 
       # Perform Python project standard tests
@@ -50,7 +50,7 @@ jobs:
         uses: ./
         with:
           python_version: ${{ env.python_version }}
-          path_prefix: "test-python-project/"
+          path_prefix: "test-python-project"
           tests_path: "tests"
 
       # Perform Python project failing tests
@@ -58,7 +58,7 @@ jobs:
         uses: ./
         with:
           python_version: ${{ env.python_version }}
-          path_prefix: "test-python-project/"
+          path_prefix: "test-python-project"
           report_artefact: false
           # Test permit failure using action input
           tests_path: "tests_fail"
@@ -71,7 +71,7 @@ jobs:
         continue-on-error: true
         with:
           python_version: ${{ env.python_version }}
-          path_prefix: "test-python-project/"
+          path_prefix: "test-python-project"
           report_artefact: false
           # Test permit failure using action input
           tests_path: "tests_fail"
