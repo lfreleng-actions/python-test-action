@@ -17,31 +17,31 @@ inputs:
   permit_fail:
     description: 'Continue even when one or more tests fails'
     required: false
-    type: boolean
-    default: false
+    # type: boolean
+    default: 'false'
   report_artefact:
     description: 'Uploads test/coverage report bundle as artefact'
     required: false
-    type: boolean
-    default: true
+    # type: boolean
+    default: 'true'
   path_prefix:
     description: 'Directory location containing Python project code'
-    type: string
+    # type: string
     required: false
     default: '.'
   tests_path:
     description: 'Path relative to the project folder containing tests'
     required: false
-    type: string
+    # type: string
   tox_tests:
     description: 'Uses tox to perform tests'
     required: false
-    type: boolean
-    default: false
+    # type: boolean
+    default: 'false'
   tox_envs:
     description: 'Space separated list of tox environments to run'
     required: false
-    type: string
+    # type: string
 
 runs:
   using: 'composite'
@@ -147,6 +147,25 @@ runs:
       uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: "${{ inputs.python_version }}"
+
+    - name: 'Cache Python dependencies'
+      # yamllint disable-line rule:line-length
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.0.2
+      with:
+        path: |
+          ~/.cache/pip
+          ~/.cache/pypoetry
+          ~/.cache/pipenv
+          .venv
+          .tox
+        # yamllint disable rule:line-length
+        key: >-
+          python-${{ runner.os }}-${{ inputs.python_version }}-
+          ${{ hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/poetry.lock', '**/Pipfile*', '**/setup.py', '**/setup.cfg') }}
+        restore-keys: |
+          python-${{ runner.os }}-${{ inputs.python_version }}-
+          python-${{ runner.os }}-
+        # yamllint enable rule:line-length
 
     - name: 'Performing tests [tox]'
       if: steps.tox-config.outputs.type == 'file' && inputs.tox_tests == 'true'
