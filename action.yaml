@@ -12,7 +12,7 @@ inputs:
     # A matrix Python build version should be passed as input
     description: 'Python version used to run test'
     required: true
-    type: string
+    # type: string
   # Optional
   permit_fail:
     description: 'Continue even when one or more tests fails'
