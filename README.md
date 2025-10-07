@@ -38,6 +38,7 @@ The example below demonstrates an implementation as a matrix job:
         with:
           python_version: ${{ matrix.python-version }}
           report_artefact: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 Note: build your project before invoking tests (not shown above)
@@ -57,6 +58,7 @@ Note: build your project before invoking tests (not shown above)
 | tests_path      | False    | test/tests   | Path relative to the project folder containing tests |
 | tox_tests       | False    | False        | Uses tox to perform Python tests (requires tox.ini)  |
 | tox_envs        | False    | "lint tests" | Space separated list of tox environment names to run |
+| github_token    | False    |              | GitHub token for API access during tests             |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -64,3 +66,21 @@ Note: build your project before invoking tests (not shown above)
 
 The embedded pytest behaviour will create HTML coverage reports as ZIP file
 bundles. Set REPORT_ARTEFACT true to also upload them to GitHub as artefacts.
+
+## GitHub Token Support
+
+The action accepts an optional `github_token` input parameter that makes the
+GitHub token available to your tests as the `GITHUB_TOKEN` environment variable.
+This is useful for tests that need to interact with GitHub APIs or access
+private repositories without encountering rate limits.
+
+### Example with GitHub Token
+
+```yaml
+- name: "Test Python project with GitHub API access"
+  uses: lfreleng-actions/python-test-action@main
+  with:
+    python_version: "3.12"
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    report_artefact: true
+```

@@ -53,6 +53,7 @@ jobs:
           python_version: ${{ env.python_version }}
           path_prefix: "test-python-project"
           tests_path: "tests"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # Perform Python project failing tests
       - name: "Run action: ${{ github.repository }} [Test Failure]"
@@ -64,6 +65,7 @@ jobs:
           # Test permit failure using action input
           tests_path: "tests_fail"
           permit_fail: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       # Perform Python project failing tests
       - name: "Run action: ${{ github.repository }} [Test Failure]"
@@ -76,6 +78,7 @@ jobs:
           report_artefact: false
           # Test permit failure using action input
           tests_path: "tests_fail"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Validate previous step failure"
         if: steps.tests-fail.outcome == 'success'

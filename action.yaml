@@ -42,12 +42,18 @@ inputs:
     description: 'Space separated list of tox environments to run'
     required: false
     # type: string
+  github_token:
+    description: 'GitHub token for API access during tests'
+    required: false
+    # type: string
 
 runs:
   using: 'composite'
   steps:
     - name: 'Setup action/environment'
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         # Setup action/environment
         if [ -z "${{ inputs.python_version }}" ]; then
@@ -170,6 +176,8 @@ runs:
     - name: 'Performing tests [tox]'
       if: steps.tox-config.outputs.type == 'file' && inputs.tox_tests == 'true'
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         # Performing tests [tox]
         echo 'Installing: tox ⬇️'
@@ -194,6 +202,8 @@ runs:
     - name: 'Install project and test/dev dependencies [pytest]'
       if: inputs.tox_tests != 'true'
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         # Install project and test/dev dependencies
 
@@ -226,6 +236,8 @@ runs:
     - name: 'Run tests and coverage report [pytest]'
       if: inputs.tox_tests != 'true'
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         # Tests and coverage report [pytest]
 
