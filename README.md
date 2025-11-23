@@ -49,18 +49,47 @@ Note: build your project before invoking tests (not shown above)
 
 <!-- markdownlint-disable MD013 -->
 
-| Variable Name   | Required | Default      | Description                                          |
-| --------------- | -------- | ------------ | ---------------------------------------------------- |
-| python_version  | True     |              | Python version used to run tests                     |
-| permit_fail     | False    | False        | Continue even when one or more tests fail            |
-| report_artefact | False    | True         | Uploads test/coverage report bundle as artefact      |
-| path_prefix     | False    |              | Directory location containing Python project code    |
-| tests_path      | False    | test/tests   | Path relative to the project folder containing tests |
-| tox_tests       | False    | False        | Uses tox to perform Python tests (requires tox.ini)  |
-| tox_envs        | False    | "lint tests" | Space separated list of tox environment names to run |
-| github_token    | False    |              | GitHub token for API access during tests             |
+| Variable Name   | Required | Default       | Description                                                               |
+| --------------- | -------- | ------------- | ------------------------------------------------------------------------- |
+| python_version  | True     |               | Python version used to run tests                                          |
+| editable        | False    | False         | Install Python package in editable mode                                   |
+| permit_fail     | False    | False         | Continue even when one or more tests fail                                 |
+| report_artefact | False    | True          | Uploads test/coverage report bundle as artefact                           |
+| artefact_name   | False    |               | Custom name for uploaded artefact                                         |
+| path_prefix     | False    | .             | Directory location containing Python project code                         |
+| tests_path      | False    | auto-detect   | Relative path to the folder containing tests (detects: `test` or `tests`) |
+| tox_tests       | False    | False         | Uses tox to perform Python tests (requires tox.ini)                       |
+| tox_envs        | False    | "lint tests"  | Space separated list of tox environment names to run                      |
+| github_token    | False    |               | GitHub token for API access during tests                                  |
+| pytest_args     | False    |               | Custom pytest arguments (e.g., -n0, -v, --tb=short)                       |
 
 <!-- markdownlint-enable MD013 -->
+
+Set artefact_name to avoid artefact naming conflicts when matrix jobs
+produce identical filenames, which can cause workflow failures when
+attempting to upload them to a workflow run.
+
+## Editable Installation Mode
+
+By default, the action installs the Python package in **standard (non-editable)**
+mode. This is the recommended approach for CI/CD testing as it:
+
+- Tests the package as users will actually install it
+- Avoids rebuild issues with complex build systems (e.g., meson-python)
+- Is faster and more reliable in CI environments
+
+Set `editable: true` when you specifically need editable installs for
+development workflows or when testing local code changes.
+
+### Example with Editable Mode
+
+```yaml
+- name: "Test Python project with editable install"
+  uses: lfreleng-actions/python-test-action@main
+  with:
+    python_version: "3.12"
+    editable: true
+```
 
 ## Coverage Reports
 
@@ -84,3 +113,47 @@ private repositories without encountering rate limits.
     github_token: ${{ secrets.GITHUB_TOKEN }}
     report_artefact: true
 ```
+
+## Custom Pytest Arguments
+
+The action supports passing custom arguments to pytest through the
+`pytest_args` input. This is useful for controlling test execution behavior,
+such as disabling parallel execution or adjusting output verbosity.
+
+**Security Note:** The action validates and sanitizes all pytest arguments to
+prevent command injection. You must use safe characters and pytest-compatible flags.
+
+### Example with Custom Pytest Arguments
+
+```yaml
+- name: "Test Python project with serial execution"
+  uses: lfreleng-actions/python-test-action@main
+  with:
+    python_version: "3.10"
+    pytest_args: "-n0"  # Disable parallel execution
+    report_artefact: true
+```
+
+```yaml
+- name: "Test Python project with custom arguments"
+  uses: lfreleng-actions/python-test-action@main
+  with:
+    python_version: "3.10"
+    pytest_args: "-v -x --tb=short"  # Three arguments combined
+    report_artefact: true
+```
+
+### Common pytest_args Examples
+
+- `-n0` - Disable parallel execution (run tests serially)
+- `-v` - Verbose output
+- `-vv` - Extra verbose output
+- `--tb=short` - Shorter traceback format
+- `-k test_name` - Run tests matching the expression
+- `-x` - Stop after first failure
+- `--maxfail=2` - Stop after 2 failures
+
+**Note:** The action accepts pytest arguments that start with `-` or `--`,
+or valid pytest expressions/paths. The action validates arguments to ensure they
+contain safe characters (alphanumeric, space, `-`, `=`, `,`, `.`, `/`, `:`, `_`).
+Use space-separated strings to pass arguments (e.g., `"-n0 -v"`).
