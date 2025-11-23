@@ -52,6 +52,7 @@ Note: build your project before invoking tests (not shown above)
 | Variable Name   | Required | Default      | Description                                          |
 | --------------- | -------- | ------------ | ---------------------------------------------------- |
 | python_version  | True     |              | Python version used to run tests                     |
+| artefact_name   | False    |              | Custom name for artefacts (defaults to project name). Useful when building for different platforms/architectures to avoid artefact name conflicts |
 | permit_fail     | False    | False        | Continue even when one or more tests fail            |
 | report_artefact | False    | True         | Uploads test/coverage report bundle as artefact      |
 | path_prefix     | False    |              | Directory location containing Python project code    |

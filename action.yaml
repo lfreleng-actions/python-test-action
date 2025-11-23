@@ -14,6 +14,12 @@ inputs:
     required: true
     # type: string
   # Optional
+  artefact_name:
+    # Useful when building for multiple platforms/architectures
+    # Can be used to avoid artefact name conflicts
+    description: 'Custom name for artefacts (defaults to project name)'
+    required: false
+    # type: string
   permit_fail:
     description: 'Continue even when one or more tests fails'
     required: false

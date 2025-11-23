@@ -87,3 +87,41 @@ jobs:
           # Check previous step failure
           echo "Error: previous step should have failed ❌"
           exit 1
+
+  ### Test custom artefact_name support ###
+  tests-custom-artefact-name:
+    name: "Test Custom Artefact Name 🏷️"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 12
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: "Checkout sample project repository"
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: "lfreleng-actions/test-python-project"
+          path: "test-python-project"
+
+      # Build with custom artefact name
+      - name: "Build Python project with custom artefact name"
+        id: build-custom
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-build-action@48381cece78a990a6ba93bd5924bcd40bf0d1a7d # v0.1.20
+        with:
+          path_prefix: "test-python-project"
+          artefact_name: "test-python-project-x64"
+          tox_build: false
+
+      # Test with custom artefact name
+      # Will fail if artefact download does not work
+      - name: "Run action with custom artefact_name: [PYTEST]"
+        uses: ./
+        with:
+          python_version: ${{ env.python_version }}
+          path_prefix: "test-python-project"
+          tests_path: "tests"
+          artefact_name: "test-python-project-x64"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
