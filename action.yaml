@@ -14,6 +14,11 @@ inputs:
     required: true
     # type: string
   # Optional
+  editable:
+    description: 'Install Python package in editable mode'
+    required: false
+    # type: boolean
+    default: 'false'
   permit_fail:
     description: 'Continue even when one or more tests fails'
     required: false
@@ -24,6 +29,10 @@ inputs:
     required: false
     # type: boolean
     default: 'true'
+  artefact_name:
+    description: 'Custom name for uploaded artefact (to avoid conflicts)'
+    required: false
+    # type: string
   path_prefix:
     description: 'Directory location containing Python project code'
     # type: string
@@ -46,6 +55,11 @@ inputs:
     description: 'GitHub token for API access during tests'
     required: false
     # type: string
+  pytest_args:
+    description: 'Additional pytest arguments (e.g., -n0 for serial execution)'
+    required: false
+    # type: string
+    default: ''
 
 runs:
   using: 'composite'
@@ -56,6 +70,52 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
         # Setup action/environment
+
+        # Helper function to validate boolean inputs (case-insensitive)
+        validate_boolean() {
+          local input_name="$1"
+          local input_value="$2"
+          local normalized=$(echo "$input_value" | tr '[:upper:]' '[:lower:]')
+
+          if [ "$normalized" != "true" ] && [ "$normalized" != "false" ]; then
+            echo "⚠️ true/false not correctly passed for $input_name"
+            echo "⚠️ true/false not correctly passed for $input_name" \
+              >> "$GITHUB_STEP_SUMMARY"
+            return 1
+          fi
+          return 0
+        }
+
+        # Validate all boolean inputs
+        validation_failed=0
+        validate_boolean "editable" "${{ inputs.editable }}" \
+          || validation_failed=1
+        validate_boolean "permit_fail" "${{ inputs.permit_fail }}" \
+          || validation_failed=1
+        validate_boolean "report_artefact" "${{ inputs.report_artefact }}" \
+          || validation_failed=1
+        validate_boolean "tox_tests" "${{ inputs.tox_tests }}" \
+          || validation_failed=1
+
+        if [ $validation_failed -eq 1 ]; then
+          echo 'Error: Invalid boolean input(s) detected ❌'; exit 1
+        fi
+
+        # Store normalized boolean values to avoid re-normalizing later
+        editable_lower=$(echo "${{ inputs.editable }}" | \
+          tr '[:upper:]' '[:lower:]')
+        permit_fail_lower=$(echo "${{ inputs.permit_fail }}" | \
+          tr '[:upper:]' '[:lower:]')
+        report_artefact_lower=$(echo "${{ inputs.report_artefact }}" | \
+          tr '[:upper:]' '[:lower:]')
+        tox_tests_lower=$(echo "${{ inputs.tox_tests }}" | \
+          tr '[:upper:]' '[:lower:]')
+
+        echo "editable_lower=$editable_lower" >> "$GITHUB_ENV"
+        echo "permit_fail_lower=$permit_fail_lower" >> "$GITHUB_ENV"
+        echo "report_artefact_lower=$report_artefact_lower" >> "$GITHUB_ENV"
+        echo "tox_tests_lower=$tox_tests_lower" >> "$GITHUB_ENV"
+
         if [ -z "${{ inputs.python_version }}" ]; then
           echo 'Error: Python version was not provided ❌'; exit 1
         else
@@ -77,12 +137,12 @@ runs:
         echo "coverage_dir=$coverage_dir" >> "$GITHUB_ENV"
         echo "Coverage report output location: $coverage_dir 💬"
 
-        if [ "f${{ inputs.permit_fail }}" = 'ftrue' ]; then
+        if [ "f$permit_fail_lower" = 'ftrue' ]; then
           echo 'Warning: test failures will be permitted ⚠️'
         fi
 
         # Testing with TOX
-        if [ "f${{ inputs.tox_tests }}" = 'ftrue' ]; then
+        if [ "f$tox_tests_lower" = 'ftrue' ]; then
           echo 'Using tox to perform tests 💬'
           if [ -z "${{ inputs.tox_envs }}" ]; then
             echo 'Using tox environment derived from matrix Python version'
@@ -112,6 +172,88 @@ runs:
         fi
         echo "Tests path: $TESTS_PATH 💬"
         echo "tests_path=$TESTS_PATH" >> "$GITHUB_ENV"
+
+    - name: 'Validate and sanitize pytest arguments'
+      shell: bash
+      run: |
+        # Validate and sanitize pytest arguments
+
+        # Ring-fence this validation from the rest of the environment
+        set -euo pipefail
+
+        pytest_args_input="${{ inputs.pytest_args }}"
+
+        if [ -z "$pytest_args_input" ]; then
+          echo "No additional pytest arguments provided"
+          echo "VALIDATED_PYTEST_ARGS=" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        echo "Validating pytest arguments: '$pytest_args_input'"
+
+        # Security validation: Check for dangerous characters
+        # Allow only: alphanumeric, spaces, hyphens, equals, commas, dots,
+        # forward slashes, colons, and underscores
+        if echo "$pytest_args_input" | grep -qE '[^a-zA-Z0-9 \-=,\./:_]'; then
+          echo "Error: Invalid characters detected in pytest_args ❌"
+          echo "Allowed characters: alphanumeric, space, - = , . / : _"
+          echo "Provided: '$pytest_args_input'"
+          exit 1
+        fi
+
+        # Check for command injection patterns
+        # Note: Single characters like |, >, <, `, ), {, }
+        #   are already blocked by regex
+        dangerous_patterns=(
+          '&&' '||' ';' '$('
+        )
+
+        for pattern in "${dangerous_patterns[@]}"; do
+          if echo "$pytest_args_input" | grep -qF "$pattern"; then
+            echo "Error: Dangerous pattern '$pattern' detected in pytest_args ❌"
+            exit 1
+          fi
+        done
+
+        # Validate that arguments start with - or -- (pytest flags)
+        # or are valid pytest expressions/paths
+        # Note: Word splitting on spaces is intentional here to parse
+        # individual arguments. Arguments with equals signs (e.g., --maxfail=2)
+        # work correctly because they contain no spaces and remain intact as
+        # single words.
+        validated_args=""
+        for arg in $pytest_args_input; do
+          # Allow pytest flags (starting with - or --)
+          if [[ "$arg" =~ ^--? ]]; then
+            validated_args="$validated_args $arg"
+          # Allow pytest expressions (e.g., test_name, test_file.py)
+          elif [[ "$arg" =~ ^[a-zA-Z0-9_./:-]+$ ]]; then
+            validated_args="$validated_args $arg"
+          else
+            echo "Error: Invalid pytest argument format: '$arg' ❌"
+            echo "Check action documentation for further details"
+            exit 1
+          fi
+        done
+
+        # Trim leading/trailing spaces
+        validated_args=$(echo "$validated_args" | xargs)
+
+        echo "Validated pytest arguments: '$validated_args' ✅"
+        echo "VALIDATED_PYTEST_ARGS=$validated_args" >> "$GITHUB_ENV"
+
+    - name: 'Setup action/environment (continued)'
+      shell: bash
+      run: |
+        # Setup pip install flags for editable mode
+        PIP_EDITABLE_FLAG=""
+        if [ "f$editable_lower" = 'ftrue' ]; then
+          PIP_EDITABLE_FLAG="-e"
+          echo "Installing package in editable mode 💬"
+        else
+          echo "Installing package in standard (non-editable) mode 💬"
+        fi
+        echo "PIP_EDITABLE_FLAG=$PIP_EDITABLE_FLAG" >> "$GITHUB_ENV"
 
     - name: 'Check for data_file in pyproject.toml'
       # yamllint disable-line rule:line-length
@@ -214,13 +356,17 @@ runs:
         if [ -f "${{ inputs.path_prefix }}/pyproject.toml" ]; then
           echo "Source: ${{ inputs.path_prefix }}/pyproject.toml ⬇️"
           # First try to install with test dependencies
-          if pip install -e "${{ inputs.path_prefix }}[test,dev]"; then
+          # Note: ./ prefix is required to indicate local path, otherwise pip
+          # interprets the argument as a package name to download from PyPI
+          if pip install ${PIP_EDITABLE_FLAG} \
+          "./${{ inputs.path_prefix }}[test,dev]"; then
             echo 'Successfully installed test and dev dependencies ✅'
-          elif pip install -e "${{ inputs.path_prefix }}[test]"; then
+          elif pip install ${PIP_EDITABLE_FLAG} \
+            "./${{ inputs.path_prefix }}[test]"; then
             echo 'Successfully installed test dependencies ✅'
           else
             echo 'Fallback: installing base package only ⚠️'
-            pip install -e "${{ inputs.path_prefix }}"
+            pip install ${PIP_EDITABLE_FLAG} "./${{ inputs.path_prefix }}"
           fi
         elif [ -f "${{ inputs.path_prefix }}/requirements.txt" ]; then
           echo "Source: ${{ inputs.path_prefix }}/requirements.txt ⬇️"
@@ -242,30 +388,43 @@ runs:
         # Tests and coverage report [pytest]
 
         # Setup XML coverage report for upload as artefact
-        if [ ${{ inputs.report_artefact }} = 'true' ]; then
+        if [ "f$report_artefact_lower" = 'ftrue' ]; then
           coverage_flags="--cov-report=term-missing \
           --cov-report=xml:/tmp/coverage-$tox_envs/coverage.xml \
           --cov-config=${{ inputs.path_prefix }}/pyproject.toml"
+        else
+          coverage_flags=""
         fi
 
         echo "Running tests in: ${{ env.tests_path }} 🧪"
-        if [ "f${{ inputs.permit_fail }}" = 'ftrue' ]; then
+        if [ "f$permit_fail_lower" = 'ftrue' ]; then
           echo 'Warning: flag set to permit test failures ⚠️'
+          # Note: VALIDATED_PYTEST_ARGS is intentionally unquoted to allow word
+          # splitting for multiple arguments. This is safe because validation
+          # logic ensures only well-formed, safe arguments are present.
           pytest \
+            --rootdir="${{ inputs.path_prefix }}" \
             $coverage_flags \
+            ${{ env.VALIDATED_PYTEST_ARGS }} \
             ${{ env.tests_path }} || true
         else
+          # Note: VALIDATED_PYTEST_ARGS is intentionally unquoted to allow word
+          # splitting for multiple arguments. This is safe because validation
+          # logic ensures only well-formed, safe arguments are present.
           pytest \
+            --rootdir="${{ inputs.path_prefix }}" \
             $coverage_flags \
+            ${{ env.VALIDATED_PYTEST_ARGS }} \
             ${{ env.tests_path }}
         fi
 
     - name: 'Upload test/coverage report'
       # yamllint disable-line rule:line-length
       uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
-      if: inputs.report_artefact == 'true'
+      if: env.report_artefact_lower == 'true'
       with:
-        name: "${{ env.tox_envs }}-coverage.xml"
+        # yamllint disable-line rule:line-length
+        name: "${{ inputs.artefact_name != '' && inputs.artefact_name || format('{0}-coverage.xml', env.tox_envs) }}"
         # yamllint disable-line rule:line-length
         path: "${{ env.coverage_dir }}/coverage.xml"
         retention-days: 90
