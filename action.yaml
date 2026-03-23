@@ -315,6 +315,49 @@ runs:
           python-${{ runner.os }}-
         # yamllint enable rule:line-length
 
+    - name: 'Ensure pip is available'
+      shell: bash
+      run: |
+        # Ensure pip is available
+        # On some runners (e.g. ubuntu-24.04-arm), actions/setup-python
+        # may not properly bootstrap pip for all Python versions
+        if python -m pip --version > /dev/null 2>&1; then
+          echo "python -m pip is available ✅"
+        else
+          echo "python -m pip not found; running ensurepip ⚠️"
+          python -m ensurepip --upgrade
+          python -m pip install --upgrade pip
+        fi
+        python -m pip --version
+        echo "pip module check succeeded ✅"
+
+        # Validate the pip executable is aligned with python -m pip
+        create_pip_wrapper=false
+        if pip --version > /dev/null 2>&1; then
+          echo "pip executable found ✅"
+          py_pip_loc="$(python -m pip -V 2>/dev/null | awk '{print $4}')"
+          exe_pip_loc="$(pip -V 2>/dev/null | awk '{print $4}')"
+          if [ -n "$py_pip_loc" ] && [ -n "$exe_pip_loc" ] \
+             && [ "$py_pip_loc" != "$exe_pip_loc" ]; then
+            echo "pip executable ($exe_pip_loc) does not match" \
+              "python -m pip ($py_pip_loc); creating wrapper ⚠️"
+            create_pip_wrapper=true
+          else
+            echo "pip executable matches python -m pip ✅"
+          fi
+        else
+          echo "pip executable not found; creating wrapper ⚠️"
+          create_pip_wrapper=true
+        fi
+
+        if [ "$create_pip_wrapper" = true ]; then
+          pip_wrapper="$(dirname "$(command -v python)")/pip"
+          printf '#!/bin/sh\nexec python -m pip "$@"\n' \
+            > "$pip_wrapper"
+          chmod +x "$pip_wrapper"
+          echo "pip wrapper created at: $pip_wrapper ✅"
+        fi
+
     - name: 'Performing tests [tox]'
       if: steps.tox-config.outputs.type == 'file' && inputs.tox_tests == 'true'
       shell: bash
