@@ -321,12 +321,14 @@ runs:
         # Ensure pip is available
         # On some runners (e.g. ubuntu-24.04-arm), actions/setup-python
         # may not properly bootstrap pip for all Python versions
+        # Note: do NOT run 'pip install --upgrade pip' after ensurepip;
+        # pip's self-upgrade can destroy its own installation, leaving
+        # the module unimportable (observed with pip 26.x on Py 3.12).
         if python -m pip --version > /dev/null 2>&1; then
           echo "python -m pip is available ✅"
         else
           echo "python -m pip not found; running ensurepip ⚠️"
           python -m ensurepip --upgrade
-          python -m pip install --upgrade pip
         fi
         python -m pip --version
         echo "pip module check succeeded ✅"
