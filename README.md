@@ -12,6 +12,18 @@ There are two ways for tests to run:
 - Using pytest and pytest-cov to run tests and generate coverage reports
 - Using tox when provided with a suitable configuration file
 
+## Tooling
+
+The action uses [uv](https://docs.astral.sh/uv/) (a fast, Rust-based Python
+package manager) to install project dependencies, and [uvx][uvx] to run
+`tox` in an ephemeral environment. When invoking tox, the action loads the
+[`tox-uv`][tox-uv] plugin by default so that tox itself provisions its
+environments through `uv` for faster execution. The action skips `pip`
+bootstrapping entirely.
+
+[uvx]: https://docs.astral.sh/uv/guides/tools/
+[tox-uv]: https://github.com/tox-dev/tox-uv
+
 ## python-test-action
 
 ## Usage Example

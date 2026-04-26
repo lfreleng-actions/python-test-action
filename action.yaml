@@ -245,15 +245,15 @@ runs:
     - name: 'Setup action/environment (continued)'
       shell: bash
       run: |
-        # Setup pip install flags for editable mode
-        PIP_EDITABLE_FLAG=""
+        # Setup uv install flags for editable mode
+        UV_EDITABLE_FLAG=""
         if [ "f$editable_lower" = 'ftrue' ]; then
-          PIP_EDITABLE_FLAG="-e"
+          UV_EDITABLE_FLAG="-e"
           echo "Installing package in editable mode 💬"
         else
           echo "Installing package in standard (non-editable) mode 💬"
         fi
-        echo "PIP_EDITABLE_FLAG=$PIP_EDITABLE_FLAG" >> "$GITHUB_ENV"
+        echo "UV_EDITABLE_FLAG=$UV_EDITABLE_FLAG" >> "$GITHUB_ENV"
 
     - name: 'Check for data_file in pyproject.toml'
       # yamllint disable-line rule:line-length
@@ -296,67 +296,31 @@ runs:
       with:
         python-version: "${{ inputs.python_version }}"
 
-    - name: 'Cache Python dependencies'
+    - name: 'Install uv'
+      # yamllint disable-line rule:line-length
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          **/pyproject.toml
+          **/requirements*.txt
+          **/uv.lock
+          **/tox.ini
+
+    - name: 'Cache tox environments'
+      if: inputs.tox_tests == 'true'
       # yamllint disable-line rule:line-length
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4.0.2
       with:
-        path: |
-          ~/.cache/pip
-          ~/.cache/pypoetry
-          ~/.cache/pipenv
-          .venv
-          .tox
+        path: "${{ inputs.path_prefix }}/.tox"
         # yamllint disable rule:line-length
         key: >-
-          python-${{ runner.os }}-${{ inputs.python_version }}-
-          ${{ hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/poetry.lock', '**/Pipfile*', '**/setup.py', '**/setup.cfg') }}
+          tox-${{ runner.os }}-${{ inputs.python_version }}-
+          ${{ hashFiles('**/tox.ini', '**/pyproject.toml', '**/requirements*.txt', '**/uv.lock') }}
         restore-keys: |
-          python-${{ runner.os }}-${{ inputs.python_version }}-
-          python-${{ runner.os }}-
+          tox-${{ runner.os }}-${{ inputs.python_version }}-
+          tox-${{ runner.os }}-
         # yamllint enable rule:line-length
-
-    - name: 'Ensure pip is available'
-      shell: bash
-      run: |
-        # Ensure pip is available
-        # On some runners (e.g. ubuntu-24.04-arm), actions/setup-python
-        # may not properly bootstrap pip for all Python versions
-        if python -m pip --version > /dev/null 2>&1; then
-          echo "python -m pip is available ✅"
-        else
-          echo "python -m pip not found; running ensurepip ⚠️"
-          python -m ensurepip --upgrade
-          python -m pip install --upgrade pip
-        fi
-        python -m pip --version
-        echo "pip module check succeeded ✅"
-
-        # Validate the pip executable is aligned with python -m pip
-        create_pip_wrapper=false
-        if pip --version > /dev/null 2>&1; then
-          echo "pip executable found ✅"
-          py_pip_loc="$(python -m pip -V 2>/dev/null | awk '{print $4}')"
-          exe_pip_loc="$(pip -V 2>/dev/null | awk '{print $4}')"
-          if [ -n "$py_pip_loc" ] && [ -n "$exe_pip_loc" ] \
-             && [ "$py_pip_loc" != "$exe_pip_loc" ]; then
-            echo "pip executable ($exe_pip_loc) does not match" \
-              "python -m pip ($py_pip_loc); creating wrapper ⚠️"
-            create_pip_wrapper=true
-          else
-            echo "pip executable matches python -m pip ✅"
-          fi
-        else
-          echo "pip executable not found; creating wrapper ⚠️"
-          create_pip_wrapper=true
-        fi
-
-        if [ "$create_pip_wrapper" = true ]; then
-          pip_wrapper="$(dirname "$(command -v python)")/pip"
-          printf '#!/bin/sh\nexec python -m pip "$@"\n' \
-            > "$pip_wrapper"
-          chmod +x "$pip_wrapper"
-          echo "pip wrapper created at: $pip_wrapper ✅"
-        fi
 
     - name: 'Performing tests [tox]'
       if: steps.tox-config.outputs.type == 'file' && inputs.tox_tests == 'true'
@@ -364,24 +328,40 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        # Performing tests [tox]
-        echo 'Installing: tox ⬇️'
-        # Under Python 3.8, use a compatible tox release, latest for others
-        if [[ "${{ inputs.python_version }}" == "3.8" ]]; then
-          echo 'Using tox<4.0.0 for Python 3.8 compatibility'
-          pip install --disable-pip-version-check -q 'tox<4.0.0'
+        # Performing tests [tox] using uvx
+        # uvx provisions tox in an ephemeral environment per invocation.
+        # Under Python 3.8, pin to a compatible tox release; otherwise use
+        # latest with tox-uv so tox itself uses uv as its provisioning
+        # backend (faster env creation).
+        py_ver="${{ inputs.python_version }}"
+        if [[ "$py_ver" == "3.8" ]]; then
+          echo 'Using tox<4.0.0 for Python 3.8 compatibility 💬'
+          tox_cmd=(uvx --python "$py_ver" --from 'tox<4.0.0' tox)
         else
-          echo 'Using latest tox version'
-          pip install --disable-pip-version-check -q tox
+          echo 'Using latest tox with tox-uv backend 💬'
+          tox_cmd=(uvx --python "$py_ver" --with tox-uv tox)
         fi
-        if [ -n "${{ env.tox_envs }}" ]; then
-          for ENV in "${{ env.tox_envs }}"; do
+
+        tox_envs_value="${{ env.tox_envs }}"
+        if [ -n "$tox_envs_value" ]; then
+          # Validate tox_envs to permit only safe characters before
+          # splitting; tox env names use [A-Za-z0-9_.-] and are
+          # space-separated per the documented input contract.
+          if [[ ! "$tox_envs_value" =~ ^[A-Za-z0-9_. -]+$ ]]; then
+            echo "Error: invalid characters in tox_envs ❌" >&2
+            echo "Allowed: letters, digits, '.', '_', '-', spaces" >&2
+            exit 1
+          fi
+
+          # Split on whitespace into an array so each env runs separately.
+          IFS=' ' read -r -a tox_env_list <<< "$tox_envs_value"
+          for ENV in "${tox_env_list[@]}"; do
             echo "Running: tox -c ${{ inputs.path_prefix }}/tox.ini -e $ENV 💬"
-            tox -c "${{ inputs.path_prefix }}/tox.ini" -e "$ENV"
+            "${tox_cmd[@]}" -c "${{ inputs.path_prefix }}/tox.ini" -e "$ENV"
           done
         else
-          echo 'Running: tox -c ${{ inputs.path_prefix }}/tox.ini 💬'
-          tox -c "${{ inputs.path_prefix }}/tox.ini"
+          echo "Running: tox -c ${{ inputs.path_prefix }}/tox.ini 💬"
+          "${tox_cmd[@]}" -c "${{ inputs.path_prefix }}/tox.ini"
         fi
 
     - name: 'Install project and test/dev dependencies [pytest]'
@@ -390,37 +370,41 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
       run: |
-        # Install project and test/dev dependencies
+        # Install project and test/dev dependencies via uv
 
         # Important note: package installation order matters
         # Install the package (editable or not) before installing test runners
-        # (like pytest and coverage) to ensure the latest code is used
+        # (like pytest and coverage) to ensure the latest code is used.
+        # uv pip --system installs into the interpreter selected by
+        # actions/setup-python (rather than auto-creating a venv).
         echo 'Install project and test/dev dependencies (before pytest install)'
         if [ -f "${{ inputs.path_prefix }}/pyproject.toml" ]; then
           echo "Source: ${{ inputs.path_prefix }}/pyproject.toml ⬇️"
           # First try to install with test dependencies
-          # Note: ./ prefix is required to indicate local path, otherwise pip
+          # Note: ./ prefix is required to indicate local path, otherwise uv
           # interprets the argument as a package name to download from PyPI
-          if pip install ${PIP_EDITABLE_FLAG} \
+          if uv pip install --system ${UV_EDITABLE_FLAG} \
           "./${{ inputs.path_prefix }}[test,dev]"; then
             echo 'Successfully installed test and dev dependencies ✅'
-          elif pip install ${PIP_EDITABLE_FLAG} \
+          elif uv pip install --system ${UV_EDITABLE_FLAG} \
             "./${{ inputs.path_prefix }}[test]"; then
             echo 'Successfully installed test dependencies ✅'
           else
             echo 'Fallback: installing base package only ⚠️'
-            pip install ${PIP_EDITABLE_FLAG} "./${{ inputs.path_prefix }}"
+            uv pip install --system ${UV_EDITABLE_FLAG} \
+              "./${{ inputs.path_prefix }}"
           fi
         elif [ -f "${{ inputs.path_prefix }}/requirements.txt" ]; then
           echo "Source: ${{ inputs.path_prefix }}/requirements.txt ⬇️"
-          pip install -r "${{ inputs.path_prefix }}/requirements.txt"
+          uv pip install --system \
+            -r "${{ inputs.path_prefix }}/requirements.txt"
         fi
 
         echo 'Installing: pytest, pytest-cov, coverage[toml] ⬇️'
-        pip install --disable-pip-version-check -q \
+        uv pip install --system -q \
           pytest \
           pytest-cov \
-          coverage\[toml\]
+          'coverage[toml]'
 
     - name: 'Run tests and coverage report [pytest]'
       if: inputs.tox_tests != 'true'
