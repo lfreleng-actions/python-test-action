@@ -268,12 +268,26 @@ jobs:
         # bare imports resolve from source. We deliberately point at
         # 'src' rather than at the meson build dir because 'src' is
         # the canonical location and is always present after checkout.
+        #
+        # pytest_args note: one upstream test
+        # (test/test_security.py::TestPlatformSupport::
+        # test_platform_check_in_init) opens 'src/__init__.py' as a
+        # path relative to CWD. In python-nss-ng's own CI, CWD ==
+        # project root, so the relative path resolves. In this
+        # regression job CWD is $GITHUB_WORKSPACE and the file lives
+        # at python-nss-ng/src/__init__.py, which makes the open()
+        # call fail with FileNotFoundError. The test is genuinely
+        # buggy (it should derive its path from __file__, not CWD),
+        # but rather than patch upstream we deselect that single node
+        # so the regression matrix exercises everything else.
         uses: ./action
         env:
           PYTHONPATH: "${{ github.workspace }}/python-nss-ng/src"
         with:
           python_version: "${{ matrix.python-version }}"
           path_prefix: "python-nss-ng"
+          # yamllint disable-line rule:line-length
+          pytest_args: "--deselect python-nss-ng/test/test_security.py::TestPlatformSupport::test_platform_check_in_init"
           tests_path: "test"
           # yamllint disable-line rule:line-length
           artefact_name: "regression-nss-ng-${{ matrix.runs-on }}-py${{ matrix.python-version }}-coverage"
