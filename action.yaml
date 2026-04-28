@@ -290,31 +290,32 @@ runs:
         # Tox configuration file missing
         echo 'Error: tox configuration file missing ❌'; exit 1
 
-    - name: "Set up Python ${{ inputs.python_version }}"
-      # yamllint disable-line rule:line-length
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-      with:
-        python-version: "${{ inputs.python_version }}"
-
-    - name: 'Install uv'
+    - name: 'Install uv and provision Python'
       # yamllint disable-line rule:line-length
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       with:
-        # Bind uv to the interpreter provisioned by actions/setup-python
-        # above and create+activate a venv (.venv) so that 'uv pip
-        # install' and the subsequent test step both target the same
-        # interpreter unambiguously.
+        # uv is the sole Python provisioner for this action. We do NOT
+        # use actions/setup-python alongside it, because doing so caused
+        # an interpreter / stdlib version skew that segfaulted CPython
+        # at runtime: setup-python installed Python 3.12.13 into the
+        # hostedtoolcache while setup-uv resolved 'python-version: 3.12'
+        # to a different patch (e.g. the system 3.12.3 on Ubuntu noble
+        # or its own python-build-standalone build). The resulting
+        # .venv/bin/python advertised one patch version while loading
+        # stdlib from another, mixing ABIs in a way CPython does not
+        # support.
         #
-        # Background: with 'uv pip install --system', uv 0.11.x has been
-        # observed to misreport the system Python's patch version
-        # (e.g. detecting 3.12.3 inside /opt/hostedtoolcache/Python/
-        # 3.12.13/arm64), which in turn caused packages to be written to
-        # a site-packages path the actual python binary does not search.
-        # Switching to an activated venv removes the version-arithmetic
-        # entirely: setup-uv prepends .venv/bin to PATH and exports
-        # VIRTUAL_ENV, so 'uv pip install' (without --system) and the
-        # 'python -m pytest' invocation that follows both resolve to
-        # .venv's interpreter and its site-packages.
+        # UV_PYTHON_PREFERENCE=only-managed (set on every step that
+        # invokes uv/uvx) forces uv to ignore any ambient Python on the
+        # runner and use exclusively a python-build-standalone build
+        # matching inputs.python_version. Combined with
+        # 'activate-environment: true', this gives a single source of
+        # truth: setup-uv downloads (or restores from cache) the
+        # managed interpreter, creates and activates .venv against it,
+        # prepends .venv/bin to PATH, and exports VIRTUAL_ENV. All
+        # subsequent 'uv pip install' calls (without --system) and the
+        # 'python -m pytest' invocation in the test step resolve to
+        # that same interpreter and its site-packages.
         python-version: "${{ inputs.python_version }}"
         activate-environment: true
         enable-cache: true
@@ -327,6 +328,56 @@ runs:
           ${{ inputs.path_prefix }}/requirements*.txt
           ${{ inputs.path_prefix }}/uv.lock
           ${{ inputs.path_prefix }}/tox.ini
+      env:
+        UV_PYTHON_PREFERENCE: only-managed
+
+    - name: 'Verify Python interpreter consistency'
+      shell: bash
+      env:
+        UV_PYTHON_PREFERENCE: only-managed
+      run: |
+        # Verify Python interpreter consistency
+        # Diagnostic: surface any interpreter/stdlib mismatch immediately
+        # rather than as a downstream segfault. If sys.prefix and
+        # sys.base_prefix disagree with the activated venv, or if the
+        # advertised version does not match inputs.python_version, this
+        # step fails fast with a clear message.
+        set -euo pipefail
+
+        echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
+        echo "python on PATH: $(command -v python || true)"
+        echo "uv on PATH: $(command -v uv || true)"
+        echo "uv version: $(uv --version || true)"
+
+        if [ -f .venv/pyvenv.cfg ]; then
+          echo '---- .venv/pyvenv.cfg ----'
+          cat .venv/pyvenv.cfg
+          echo '--------------------------'
+        fi
+
+        python - <<'PY'
+        import sys
+        print(f"sys.executable  = {sys.executable}")
+        print(f"sys.version     = {sys.version}")
+        print(f"sys.prefix      = {sys.prefix}")
+        print(f"sys.base_prefix = {sys.base_prefix}")
+        PY
+
+        # Sanity-check that the interpreter's advertised X.Y matches the
+        # version requested via inputs.python_version. We accept any
+        # patch level (uv resolves to the latest matching managed
+        # build), but the major.minor must agree.
+        requested="${{ inputs.python_version }}"
+        actual="$(python -c \
+          'import sys; print("%d.%d" % sys.version_info[:2])')"
+        req_xy="$(echo "$requested" | awk -F. '{print $1"."$2}')"
+        if [ "$actual" != "$req_xy" ]; then
+          echo "Error: interpreter version mismatch ❌" >&2
+          echo "  requested (X.Y): $req_xy" >&2
+          echo "  actual    (X.Y): $actual" >&2
+          exit 1
+        fi
+        echo "Interpreter version OK: $actual matches requested $req_xy ✅"
 
     - name: 'Cache tox environments'
       if: env.tox_tests_lower == 'true'
@@ -359,6 +410,10 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        # Force uvx to use the same managed Python as setup-uv, so tox
+        # (and any tox-managed envs via tox-uv) cannot drift onto a
+        # different ambient interpreter.
+        UV_PYTHON_PREFERENCE: only-managed
       run: |
         # Performing tests [tox] using uvx
         # uvx provisions tox in an ephemeral environment per invocation.
@@ -401,6 +456,9 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        # Belt-and-braces: keep uv pinned to managed Python so an
+        # ambient interpreter cannot leak in here either.
+        UV_PYTHON_PREFERENCE: only-managed
       run: |
         # Install project and test/dev dependencies via uv
 
