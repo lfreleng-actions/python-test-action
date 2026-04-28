@@ -301,13 +301,22 @@ runs:
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       with:
         # Bind uv to the interpreter provisioned by actions/setup-python
-        # above. Without this, setup-uv v8 may resolve and download its
-        # own Python (e.g. a different patch release) into
-        # UV_PYTHON_INSTALL_DIR; 'uv pip install --system' would then
-        # install packages into uv's interpreter while the test step's
-        # 'pytest' binary (shebang from setup-python's interpreter)
-        # would not see them, producing 'No module named pytest'.
+        # above and create+activate a venv (.venv) so that 'uv pip
+        # install' and the subsequent test step both target the same
+        # interpreter unambiguously.
+        #
+        # Background: with 'uv pip install --system', uv 0.11.x has been
+        # observed to misreport the system Python's patch version
+        # (e.g. detecting 3.12.3 inside /opt/hostedtoolcache/Python/
+        # 3.12.13/arm64), which in turn caused packages to be written to
+        # a site-packages path the actual python binary does not search.
+        # Switching to an activated venv removes the version-arithmetic
+        # entirely: setup-uv prepends .venv/bin to PATH and exports
+        # VIRTUAL_ENV, so 'uv pip install' (without --system) and the
+        # 'python -m pytest' invocation that follows both resolve to
+        # .venv's interpreter and its site-packages.
         python-version: "${{ inputs.python_version }}"
+        activate-environment: true
         enable-cache: true
         # Scope dependency globs to inputs.path_prefix so monorepos with
         # multiple Python projects do not invalidate this action's cache
@@ -390,49 +399,45 @@ runs:
       run: |
         # Install project and test/dev dependencies via uv
 
-        # Important note: package installation order matters
-        # Install the package (editable or not) before installing test runners
-        # (like pytest and coverage) to ensure the latest code is used.
+        # Package installation order matters: install the project itself
+        # (editable or not) before the test runners so that the latest
+        # local code is what test imports resolve against.
         #
-        # Pin uv to the actions/setup-python interpreter via --python so
-        # installs always land in the interpreter the test step uses.
-        # 'uv pip install --system' alone is not sufficient: setup-uv v8
-        # may have provisioned its own Python (different patch level),
-        # and --system would then target that interpreter rather than
-        # the one resolved by setup-python. Belt-and-braces: setup-uv is
-        # already configured with python-version above, but we pass
-        # --python explicitly here so behaviour is independent of
-        # setup-uv's defaults.
+        # We deliberately do NOT pass '--system' here. setup-uv has
+        # already provisioned and activated a venv at .venv (PATH is
+        # prepended, VIRTUAL_ENV is exported), so an unqualified
+        # 'uv pip install' targets that venv's interpreter. The same
+        # 'python' resolved on PATH (and the 'python -m pytest' call in
+        # the next step) consequently see the installs without any
+        # interpreter-version arithmetic.
         PYTHON_BIN="$(command -v python)"
         echo "Installing into interpreter: $PYTHON_BIN 💬"
+        echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>} 💬"
         echo 'Install project and test/dev dependencies (before pytest install)'
         if [ -f "${{ inputs.path_prefix }}/pyproject.toml" ]; then
           echo "Source: ${{ inputs.path_prefix }}/pyproject.toml ⬇️"
           # First try to install with test dependencies
           # Note: ./ prefix is required to indicate local path, otherwise uv
           # interprets the argument as a package name to download from PyPI
-          if uv pip install --python "$PYTHON_BIN" --system \
-          ${UV_EDITABLE_FLAG} \
+          if uv pip install ${UV_EDITABLE_FLAG} \
           "./${{ inputs.path_prefix }}[test,dev]"; then
             echo 'Successfully installed test and dev dependencies ✅'
-          elif uv pip install --python "$PYTHON_BIN" --system \
-            ${UV_EDITABLE_FLAG} \
+          elif uv pip install ${UV_EDITABLE_FLAG} \
             "./${{ inputs.path_prefix }}[test]"; then
             echo 'Successfully installed test dependencies ✅'
           else
             echo 'Fallback: installing base package only ⚠️'
-            uv pip install --python "$PYTHON_BIN" --system \
-              ${UV_EDITABLE_FLAG} \
+            uv pip install ${UV_EDITABLE_FLAG} \
               "./${{ inputs.path_prefix }}"
           fi
         elif [ -f "${{ inputs.path_prefix }}/requirements.txt" ]; then
           echo "Source: ${{ inputs.path_prefix }}/requirements.txt ⬇️"
-          uv pip install --python "$PYTHON_BIN" --system \
+          uv pip install \
             -r "${{ inputs.path_prefix }}/requirements.txt"
         fi
 
         echo 'Installing: pytest, pytest-cov, coverage[toml] ⬇️'
-        uv pip install --python "$PYTHON_BIN" --system -q \
+        uv pip install -q \
           pytest \
           pytest-cov \
           'coverage[toml]'
