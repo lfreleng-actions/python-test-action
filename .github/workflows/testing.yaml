@@ -20,9 +20,29 @@ env:
 
 jobs:
   ### Test the GitHub Action in this Repository ###
+  #
+  # Runs the action across both x64 and arm64 ubuntu-24.04 runners as a
+  # regression guard against a previously observed failure mode where
+  # actions/setup-python on these runners did not reliably bootstrap pip
+  # for Python 3.12, causing 'No module named pip' errors. The migration
+  # from pip to uv removes the dependency on actions/setup-python's pip
+  # provisioning, but we keep both architectures permanently in CI to
+  # detect any future regression in the underlying setup chain.
+  #
+  # Original failure references:
+  # yamllint disable rule:line-length
+  #   https://github.com/ModeSevenIndustrialSolutions/python-nss-ng/actions/runs/24763417356/job/72452664716  # arm64
+  #   https://github.com/ModeSevenIndustrialSolutions/python-nss-ng/actions/runs/24763417356/job/72452544137  # x64
+  # yamllint enable rule:line-length
   tests:
-    name: "Run Tests 🧪"
-    runs-on: ubuntu-24.04
+    name: "Run Tests 🧪 (${{ matrix.runs-on }})"
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
     permissions:
       contents: read
     timeout-minutes: 12
