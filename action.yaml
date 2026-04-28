@@ -340,12 +340,17 @@ runs:
         # so subprojects in a monorepo do not collide on the same cache
         # entry. A .tox archive built for one subproject must never be
         # restored into another.
+        #
+        # restore-keys retains ONLY the path_prefix-scoped tier. Broader
+        # fallbacks (omitting path_prefix) would let a partial hit pull
+        # a .tox archive built for a different subproject into this
+        # one's workdir, which is exactly the cross-project pollution
+        # the discriminator was added to prevent. A clean miss that
+        # rebuilds .tox is preferable to a misleading partial hit.
         key: >-
           tox-${{ runner.os }}-${{ inputs.python_version }}-${{ inputs.path_prefix }}-${{ hashFiles(format('{0}/tox.ini', inputs.path_prefix), format('{0}/pyproject.toml', inputs.path_prefix), format('{0}/requirements*.txt', inputs.path_prefix), format('{0}/uv.lock', inputs.path_prefix)) }}
         restore-keys: |
           tox-${{ runner.os }}-${{ inputs.python_version }}-${{ inputs.path_prefix }}-
-          tox-${{ runner.os }}-${{ inputs.python_version }}-
-          tox-${{ runner.os }}-
         # yamllint enable rule:line-length
 
     - name: 'Performing tests [tox]'
