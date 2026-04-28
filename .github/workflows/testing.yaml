@@ -107,3 +107,154 @@ jobs:
           # Check previous step failure
           echo "Error: previous step should have failed ❌"
           exit 1
+
+  ### Real-world regression matrix: python-nss-ng ###
+  #
+  # Runs the action against the full python-nss-ng repository across
+  # both x64 and arm64 runners and the full supported Python matrix
+  # (3.10 - 3.14). python-nss-ng is one of the more complex Python
+  # projects we exercise: it ships C extensions linking against
+  # system NSS/NSPR libraries, builds via meson-python, and historically
+  # surfaced two distinct classes of bug in this action that simpler
+  # fixtures missed:
+  #
+  #   1. pip -> uv interpreter mismatch on real packages with
+  #      [test,dev] extras + meson-python build
+  #      (uv 0.11.x mis-detected the interpreter's patch version,
+  #       installing pytest into a site-packages path the running
+  #       python could not find).
+  #   2. setup-python vs setup-uv patch-version disagreement on
+  #      Ubuntu noble + Python 3.12, producing a venv whose binary
+  #      advertised one patch level while loading stdlib from another;
+  #      this crashed CPython inside LogRecord.__init__.
+  #
+  # python-nss-ng is pinned to a known-good commit so that any
+  # regression detected here is attributable to changes in this
+  # action rather than upstream churn. Bump the pin deliberately
+  # when validating against a newer python-nss-ng baseline.
+  #
+  # This job runs in parallel to the lightweight 'tests' job above
+  # and is intentionally heavier (full Python matrix, native build,
+  # apt-installed NSS dependencies). It is not a replacement.
+  regression-python-nss-ng:
+    # yamllint disable-line rule:line-length
+    name: "Regression: python-nss-ng (${{ matrix.runs-on }} / Py${{ matrix.python-version }})"
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    env:
+      # Pinned python-nss-ng commit. Update this when validating
+      # against a newer baseline of the downstream project.
+      NSS_NG_REPO: "ModeSevenIndustrialSolutions/python-nss-ng"
+      NSS_NG_REF: "9d83d31a5f2dca6f958b593f5ef71c16bc1738f6"
+    steps:
+      - name: "Checkout repository (action under test)"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: "action"
+
+      - name: "Checkout python-nss-ng at pinned commit"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: "${{ env.NSS_NG_REPO }}"
+          ref: "${{ env.NSS_NG_REF }}"
+          path: "python-nss-ng"
+
+      - name: "Install NSS/NSPR system dependencies"
+        working-directory: "python-nss-ng"
+        shell: bash
+        run: |
+          # Install apt-level NSS/NSPR build deps via the project's
+          # own Makefile target. Python-level deps are deliberately
+          # left to the action under test.
+          make deps-nss deps-test-system env-github-actions
+          # Refresh ldconfig cache so libnss/libnspr are discoverable
+          sudo ldconfig
+          # Export multi-arch library path for downstream steps.
+          LIB_PATH="/usr/lib"
+          LIB_PATH="${LIB_PATH}:/usr/lib/x86_64-linux-gnu"
+          LIB_PATH="${LIB_PATH}:/usr/lib/aarch64-linux-gnu"
+          echo "LD_LIBRARY_PATH=${LIB_PATH}" >> "$GITHUB_ENV"
+
+      - name: "Verify NSS libraries are discoverable"
+        shell: bash
+        run: |
+          # Verify NSS libraries are discoverable
+          echo "=== Library Path Diagnostics ==="
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
+          echo ""
+          echo "=== ldconfig cache (NSS / NSPR) ==="
+          ldconfig -p | grep -E '(nss|nspr)' || \
+            echo "NSS/NSPR not in ldconfig cache ⚠️"
+          echo ""
+          echo "=== pkg-config ==="
+          pkg-config --exists nss && \
+            echo "NSS: $(pkg-config --modversion nss) ✅" || \
+            echo "NSS not found by pkg-config ⚠️"
+          pkg-config --exists nspr && \
+            echo "NSPR: $(pkg-config --modversion nspr) ✅" || \
+            echo "NSPR not found by pkg-config ⚠️"
+
+      - name: "Run action: python-nss-ng Py${{ matrix.python-version }}"
+        # Use the local checkout of the action under test rather than
+        # 'uses: ./' at workflow root, since the workflow root holds
+        # python-nss-ng's checkout in this job.
+        uses: ./action
+        with:
+          python_version: "${{ matrix.python-version }}"
+          path_prefix: "python-nss-ng"
+          tests_path: "test"
+          # yamllint disable-line rule:line-length
+          artefact_name: "regression-nss-ng-${{ matrix.runs-on }}-py${{ matrix.python-version }}-coverage"
+          report_artefact: "true"
+          github_token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Post-test diagnostics (on failure)"
+        if: failure()
+        shell: bash
+        run: |
+          # Post-test diagnostics
+          # Surface enough state to triage interpreter / install /
+          # link-time issues without rerunning the job manually.
+          echo "=== POST-TEST DIAGNOSTICS ==="
+          echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
+          echo "python on PATH: $(command -v python || true)"
+          if command -v python >/dev/null 2>&1; then
+            python - <<'PY' || true
+          import sys
+          print(f"sys.executable  = {sys.executable}")
+          print(f"sys.version     = {sys.version}")
+          print(f"sys.prefix      = {sys.prefix}")
+          print(f"sys.base_prefix = {sys.base_prefix}")
+          PY
+          fi
+          if [ -f python-nss-ng/.venv/pyvenv.cfg ]; then
+            echo '---- python-nss-ng/.venv/pyvenv.cfg ----'
+            cat python-nss-ng/.venv/pyvenv.cfg
+            echo '----------------------------------------'
+          fi
+          echo ""
+          echo "=== Installed nss/python-nss-ng artefacts ==="
+          if command -v python >/dev/null 2>&1; then
+            python -m pip show python-nss-ng || \
+              echo "python-nss-ng not visible to pip"
+          fi
+          echo ""
+          echo "=== ldd of any built nss .so files ==="
+          find python-nss-ng -name "*.so" 2>/dev/null | while read -r so; do
+            echo "--- $so ---"
+            ldd "$so" 2>&1 | grep -E "(nss|nspr|not found)" || true
+          done
