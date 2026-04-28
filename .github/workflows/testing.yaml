@@ -252,7 +252,25 @@ jobs:
         # Use the local checkout of the action under test rather than
         # 'uses: ./' at workflow root, since the workflow root holds
         # python-nss-ng's checkout in this job.
+        #
+        # PYTHONPATH note: python-nss-ng/test/{test_deprecations,
+        # test_secure_logging,test_zzz_nss_context}.py contain bare
+        # top-level imports ('from deprecations import ...' etc.)
+        # whose targets live at python-nss-ng/src/*.py. The project's
+        # own conftest.py works around this by walking up from CWD
+        # looking for 'meson.build' + 'build/' and inserting the
+        # discovered build dir into sys.path. That walk only succeeds
+        # when CWD == project root; in this regression job CWD is
+        # $GITHUB_WORKSPACE and meson.build lives one level below in
+        # python-nss-ng/, so the walk never finds it.
+        #
+        # Setting PYTHONPATH to python-nss-ng/src directly makes the
+        # bare imports resolve from source. We deliberately point at
+        # 'src' rather than at the meson build dir because 'src' is
+        # the canonical location and is always present after checkout.
         uses: ./action
+        env:
+          PYTHONPATH: "${{ github.workspace }}/python-nss-ng/src"
         with:
           python_version: "${{ matrix.python-version }}"
           path_prefix: "python-nss-ng"
