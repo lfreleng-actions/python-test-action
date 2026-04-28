@@ -275,7 +275,7 @@ runs:
         echo "Set data_file parameter in pyproject.toml to avoid this warning"
 
     - name: 'Check for tox configuration file'
-      if: inputs.tox_tests == 'true'
+      if: env.tox_tests_lower == 'true'
       id: tox-config
       # yamllint disable-line rule:line-length
       uses: lfreleng-actions/path-check-action@9606e61c870025bc956e63156d1d55c5df54426c # v0.2.0
@@ -284,7 +284,7 @@ runs:
 
     - name: 'Tox configuration file missing'
       # yamllint disable-line rule:line-length
-      if: steps.tox-config.outputs.type != 'file' && inputs.tox_tests == 'true'
+      if: steps.tox-config.outputs.type != 'file' && env.tox_tests_lower == 'true'
       shell: bash
       run: |
         # Tox configuration file missing
@@ -308,7 +308,7 @@ runs:
           **/tox.ini
 
     - name: 'Cache tox environments'
-      if: inputs.tox_tests == 'true'
+      if: env.tox_tests_lower == 'true'
       # yamllint disable-line rule:line-length
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4.0.2
       with:
@@ -323,7 +323,8 @@ runs:
         # yamllint enable rule:line-length
 
     - name: 'Performing tests [tox]'
-      if: steps.tox-config.outputs.type == 'file' && inputs.tox_tests == 'true'
+      # yamllint disable-line rule:line-length
+      if: steps.tox-config.outputs.type == 'file' && env.tox_tests_lower == 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
@@ -365,7 +366,7 @@ runs:
         fi
 
     - name: 'Install project and test/dev dependencies [pytest]'
-      if: inputs.tox_tests != 'true'
+      if: env.tox_tests_lower != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
@@ -407,7 +408,7 @@ runs:
           'coverage[toml]'
 
     - name: 'Run tests and coverage report [pytest]'
-      if: inputs.tox_tests != 'true'
+      if: env.tox_tests_lower != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
