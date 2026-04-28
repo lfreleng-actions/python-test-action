@@ -208,6 +208,46 @@ jobs:
             echo "NSPR: $(pkg-config --modversion nspr) ✅" || \
             echo "NSPR not found by pkg-config ⚠️"
 
+      # Build python-nss-ng's meson tree before running pytest.
+      #
+      # python-nss-ng's test suite contains bare imports such as
+      # 'from deprecations import ...' / 'from nss_context import ...'
+      # / 'from secure_logging import ...' at module scope (e.g. in
+      # test/test_deprecations.py, test/test_secure_logging.py,
+      # test/test_zzz_nss_context.py). Those modules live at
+      # src/{deprecations,nss_context,secure_logging}.py and meson
+      # installs them under the 'nss' subpackage at install time, so
+      # they are NOT importable as top-level names from a plain
+      # 'uv pip install' of the project.
+      #
+      # The project's own conftest.py works around this by inserting
+      # the meson 'build/lib.<platform>-<X.Y>' directory into sys.path
+      # via util.get_build_dir() - but that directory only exists if
+      # an in-tree meson build has been performed. Without it, pytest
+      # collection fails with ModuleNotFoundError on those three test
+      # modules.
+      #
+      # python-nss-ng's own CI runs lfreleng-actions/python-build-action
+      # before invoking python-test-action, which produces the build
+      # tree as a side effect. Mirror that here so the regression job
+      # exercises the same end-to-end shape consumers actually use.
+      - name: "Build python-nss-ng (meson) Py${{ matrix.python-version }}"
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-build-action@38b9a4e7ee34e56d178f5bd248df52e41f7d496e # v1.0.6
+        with:
+          path_prefix: "python-nss-ng"
+          python_version: "${{ matrix.python-version }}"
+          # Build via the project's Makefile so meson is invoked the
+          # same way python-nss-ng's own CI invokes it. NSS apt deps
+          # are installed in the previous step, but re-running the
+          # idempotent target here keeps env-github-actions in sync.
+          make: "true"
+          make_args: "deps-nss env-github-actions"
+          # The action under test handles its own coverage/test
+          # artefact uploads; the build artefact is not needed here.
+          # yamllint disable-line rule:line-length
+          artefact_name: "regression-nss-ng-build-${{ matrix.runs-on }}-py${{ matrix.python-version }}"
+
       - name: "Run action: python-nss-ng Py${{ matrix.python-version }}"
         # Use the local checkout of the action under test rather than
         # 'uses: ./' at workflow root, since the workflow root holds
