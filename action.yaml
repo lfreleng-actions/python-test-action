@@ -300,6 +300,14 @@ runs:
       # yamllint disable-line rule:line-length
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
       with:
+        # Bind uv to the interpreter provisioned by actions/setup-python
+        # above. Without this, setup-uv v8 may resolve and download its
+        # own Python (e.g. a different patch release) into
+        # UV_PYTHON_INSTALL_DIR; 'uv pip install --system' would then
+        # install packages into uv's interpreter while the test step's
+        # 'pytest' binary (shebang from setup-python's interpreter)
+        # would not see them, producing 'No module named pytest'.
+        python-version: "${{ inputs.python_version }}"
         enable-cache: true
         cache-dependency-glob: |
           **/pyproject.toml
@@ -376,36 +384,55 @@ runs:
         # Important note: package installation order matters
         # Install the package (editable or not) before installing test runners
         # (like pytest and coverage) to ensure the latest code is used.
-        # uv pip --system installs into the interpreter selected by
-        # actions/setup-python (rather than auto-creating a venv).
+        #
+        # Pin uv to the actions/setup-python interpreter via --python so
+        # installs always land in the interpreter the test step uses.
+        # 'uv pip install --system' alone is not sufficient: setup-uv v8
+        # may have provisioned its own Python (different patch level),
+        # and --system would then target that interpreter rather than
+        # the one resolved by setup-python. Belt-and-braces: setup-uv is
+        # already configured with python-version above, but we pass
+        # --python explicitly here so behaviour is independent of
+        # setup-uv's defaults.
+        PYTHON_BIN="$(command -v python)"
+        echo "Installing into interpreter: $PYTHON_BIN 💬"
         echo 'Install project and test/dev dependencies (before pytest install)'
         if [ -f "${{ inputs.path_prefix }}/pyproject.toml" ]; then
           echo "Source: ${{ inputs.path_prefix }}/pyproject.toml ⬇️"
           # First try to install with test dependencies
           # Note: ./ prefix is required to indicate local path, otherwise uv
           # interprets the argument as a package name to download from PyPI
-          if uv pip install --system ${UV_EDITABLE_FLAG} \
+          if uv pip install --python "$PYTHON_BIN" --system \
+          ${UV_EDITABLE_FLAG} \
           "./${{ inputs.path_prefix }}[test,dev]"; then
             echo 'Successfully installed test and dev dependencies ✅'
-          elif uv pip install --system ${UV_EDITABLE_FLAG} \
+          elif uv pip install --python "$PYTHON_BIN" --system \
+            ${UV_EDITABLE_FLAG} \
             "./${{ inputs.path_prefix }}[test]"; then
             echo 'Successfully installed test dependencies ✅'
           else
             echo 'Fallback: installing base package only ⚠️'
-            uv pip install --system ${UV_EDITABLE_FLAG} \
+            uv pip install --python "$PYTHON_BIN" --system \
+              ${UV_EDITABLE_FLAG} \
               "./${{ inputs.path_prefix }}"
           fi
         elif [ -f "${{ inputs.path_prefix }}/requirements.txt" ]; then
           echo "Source: ${{ inputs.path_prefix }}/requirements.txt ⬇️"
-          uv pip install --system \
+          uv pip install --python "$PYTHON_BIN" --system \
             -r "${{ inputs.path_prefix }}/requirements.txt"
         fi
 
         echo 'Installing: pytest, pytest-cov, coverage[toml] ⬇️'
-        uv pip install --system -q \
+        uv pip install --python "$PYTHON_BIN" --system -q \
           pytest \
           pytest-cov \
           'coverage[toml]'
+
+        # Verify pytest is importable from the same interpreter that the
+        # subsequent 'Run tests' step will use.
+        echo 'Verifying pytest is available in the target interpreter ⬇️'
+        "$PYTHON_BIN" -c \
+          'import pytest; print(f"pytest {pytest.__version__} OK")'
 
     - name: 'Run tests and coverage report [pytest]'
       if: env.tox_tests_lower != 'true'
@@ -425,12 +452,16 @@ runs:
         fi
 
         echo "Running tests in: ${{ env.tests_path }} 🧪"
+        # Invoke pytest via 'python -m pytest' rather than the 'pytest'
+        # console script so test execution always uses the interpreter
+        # that the install step targeted, regardless of which 'pytest'
+        # binary happens to come first on PATH.
         if [ "f$permit_fail_lower" = 'ftrue' ]; then
           echo 'Warning: flag set to permit test failures ⚠️'
           # Note: VALIDATED_PYTEST_ARGS is intentionally unquoted to allow word
           # splitting for multiple arguments. This is safe because validation
           # logic ensures only well-formed, safe arguments are present.
-          pytest \
+          python -m pytest \
             --rootdir="${{ inputs.path_prefix }}" \
             $coverage_flags \
             ${{ env.VALIDATED_PYTEST_ARGS }} \
@@ -439,7 +470,7 @@ runs:
           # Note: VALIDATED_PYTEST_ARGS is intentionally unquoted to allow word
           # splitting for multiple arguments. This is safe because validation
           # logic ensures only well-formed, safe arguments are present.
-          pytest \
+          python -m pytest \
             --rootdir="${{ inputs.path_prefix }}" \
             $coverage_flags \
             ${{ env.VALIDATED_PYTEST_ARGS }} \
