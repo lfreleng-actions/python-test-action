@@ -309,11 +309,15 @@ runs:
         # would not see them, producing 'No module named pytest'.
         python-version: "${{ inputs.python_version }}"
         enable-cache: true
+        # Scope dependency globs to inputs.path_prefix so monorepos with
+        # multiple Python projects do not invalidate this action's cache
+        # on changes to unrelated subprojects, and so distinct
+        # subprojects do not collide on the same cache key.
         cache-dependency-glob: |
-          **/pyproject.toml
-          **/requirements*.txt
-          **/uv.lock
-          **/tox.ini
+          ${{ inputs.path_prefix }}/pyproject.toml
+          ${{ inputs.path_prefix }}/requirements*.txt
+          ${{ inputs.path_prefix }}/uv.lock
+          ${{ inputs.path_prefix }}/tox.ini
 
     - name: 'Cache tox environments'
       if: env.tox_tests_lower == 'true'
@@ -322,10 +326,15 @@ runs:
       with:
         path: "${{ inputs.path_prefix }}/.tox"
         # yamllint disable rule:line-length
+        # Hash only the dependency descriptors that live under
+        # inputs.path_prefix, and include the prefix itself in the key
+        # so subprojects in a monorepo do not collide on the same cache
+        # entry. A .tox archive built for one subproject must never be
+        # restored into another.
         key: >-
-          tox-${{ runner.os }}-${{ inputs.python_version }}-
-          ${{ hashFiles('**/tox.ini', '**/pyproject.toml', '**/requirements*.txt', '**/uv.lock') }}
+          tox-${{ runner.os }}-${{ inputs.python_version }}-${{ inputs.path_prefix }}-${{ hashFiles(format('{0}/tox.ini', inputs.path_prefix), format('{0}/pyproject.toml', inputs.path_prefix), format('{0}/requirements*.txt', inputs.path_prefix), format('{0}/uv.lock', inputs.path_prefix)) }}
         restore-keys: |
+          tox-${{ runner.os }}-${{ inputs.python_version }}-${{ inputs.path_prefix }}-
           tox-${{ runner.os }}-${{ inputs.python_version }}-
           tox-${{ runner.os }}-
         # yamllint enable rule:line-length
