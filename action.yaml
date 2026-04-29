@@ -66,8 +66,24 @@ runs:
   steps:
     - name: 'Setup action/environment'
       shell: bash
+      # Pass user-controlled inputs through the environment rather than
+      # via '${{ inputs.X }}' expression interpolation. The runner
+      # substitutes those expressions into the generated shell-script
+      # source BEFORE bash executes, so any in-script validation runs
+      # too late to defend against a value containing quotes, newlines
+      # or other shell metacharacters. With env: the value reaches
+      # bash as a normal environment variable - quoting is safe and
+      # validation always runs against the actual content.
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        INPUT_EDITABLE: ${{ inputs.editable }}
+        INPUT_PERMIT_FAIL: ${{ inputs.permit_fail }}
+        INPUT_REPORT_ARTEFACT: ${{ inputs.report_artefact }}
+        INPUT_TOX_TESTS: ${{ inputs.tox_tests }}
+        INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
+        INPUT_TOX_ENVS: ${{ inputs.tox_envs }}
+        INPUT_TESTS_PATH: ${{ inputs.tests_path }}
       run: |
         # Setup action/environment
 
@@ -86,15 +102,19 @@ runs:
           return 0
         }
 
-        # Validate all boolean inputs
+        # Validate all boolean inputs. Read from $INPUT_* env vars
+        # (set on this step) rather than via '${{ inputs.X }}'
+        # expression interpolation - the latter substitutes into the
+        # script source BEFORE bash executes and is the script-source-
+        # injection vector this refactor closes.
         validation_failed=0
-        validate_boolean "editable" "${{ inputs.editable }}" \
+        validate_boolean "editable" "$INPUT_EDITABLE" \
           || validation_failed=1
-        validate_boolean "permit_fail" "${{ inputs.permit_fail }}" \
+        validate_boolean "permit_fail" "$INPUT_PERMIT_FAIL" \
           || validation_failed=1
-        validate_boolean "report_artefact" "${{ inputs.report_artefact }}" \
+        validate_boolean "report_artefact" "$INPUT_REPORT_ARTEFACT" \
           || validation_failed=1
-        validate_boolean "tox_tests" "${{ inputs.tox_tests }}" \
+        validate_boolean "tox_tests" "$INPUT_TOX_TESTS" \
           || validation_failed=1
 
         if [ $validation_failed -eq 1 ]; then
@@ -102,13 +122,13 @@ runs:
         fi
 
         # Store normalized boolean values to avoid re-normalizing later
-        editable_lower=$(echo "${{ inputs.editable }}" | \
+        editable_lower=$(echo "$INPUT_EDITABLE" | \
           tr '[:upper:]' '[:lower:]')
-        permit_fail_lower=$(echo "${{ inputs.permit_fail }}" | \
+        permit_fail_lower=$(echo "$INPUT_PERMIT_FAIL" | \
           tr '[:upper:]' '[:lower:]')
-        report_artefact_lower=$(echo "${{ inputs.report_artefact }}" | \
+        report_artefact_lower=$(echo "$INPUT_REPORT_ARTEFACT" | \
           tr '[:upper:]' '[:lower:]')
-        tox_tests_lower=$(echo "${{ inputs.tox_tests }}" | \
+        tox_tests_lower=$(echo "$INPUT_TOX_TESTS" | \
           tr '[:upper:]' '[:lower:]')
 
         echo "editable_lower=$editable_lower" >> "$GITHUB_ENV"
@@ -116,14 +136,17 @@ runs:
         echo "report_artefact_lower=$report_artefact_lower" >> "$GITHUB_ENV"
         echo "tox_tests_lower=$tox_tests_lower" >> "$GITHUB_ENV"
 
-        # Validate inputs.python_version against a strict X.Y or X.Y.Z
-        # form before any further use. The value flows into filesystem
-        # paths (coverage_dir, generated .coveragerc location), the
-        # default artefact name, and gets persisted to $GITHUB_ENV via
-        # tox_envs / coverage_slug. A strict numeric / dotted pattern
-        # closes any window for path-injection or env-file-injection
-        # via crafted python_version values.
-        python_version_input="${{ inputs.python_version }}"
+        # Validate $INPUT_PYTHON_VERSION (passed via env: above)
+        # against a strict X.Y or X.Y.Z form before any further use.
+        # The value flows into filesystem paths (coverage_dir,
+        # generated .coveragerc location), the default artefact name,
+        # and gets persisted to $GITHUB_ENV via tox_envs /
+        # coverage_slug. A strict numeric / dotted pattern - applied
+        # against the env-var content, not against an interpolated
+        # script source - closes the path-injection,
+        # env-file-injection, and script-source-injection windows
+        # together.
+        python_version_input="$INPUT_PYTHON_VERSION"
         if [ -z "$python_version_input" ]; then
           echo 'Error: Python version was not provided ❌'; exit 1
         fi
@@ -136,29 +159,40 @@ runs:
         fi
         echo "Using Python: $python_version_input 🐍"
 
-        # Validate inputs.path_prefix. Rejecting only the obvious
-        # 'invalid path' case is insufficient: the value is
-        # interpolated directly into the script source via
-        # '${{ inputs.path_prefix }}', so any character that could
-        # close the surrounding double-quoted string or introduce
-        # additional shell tokens is a script-source-injection risk.
-        # We constrain the input to the characters real project paths
-        # actually use - alphanumerics, '/', '.', '_', '-', and a
-        # single optional '/' suffix - and reject anything else
-        # (notably double quotes, backticks, '$', newline, carriage
-        # return, semicolons, ampersands, pipes).
-        path_prefix_input="${{ inputs.path_prefix }}"
-        path_prefix_re='^[A-Za-z0-9_./-]+$'
-        if [[ ! "$path_prefix_input" =~ $path_prefix_re ]]; then
-          echo 'Error: invalid characters in path_prefix ❌' >&2
-          echo "Provided: '$path_prefix_input'" >&2
-          echo "Allowed: letters, digits, '/', '.', '_', '-'" >&2
-          exit 1
-        fi
+        # Validate $INPUT_PATH_PREFIX (passed via env: above).
+        # Because the value now reaches bash through the environment
+        # rather than via script-source interpolation, quoting is
+        # safe and we can be more permissive than the previous
+        # allowlist - paths containing spaces are valid filesystem
+        # names and there is no longer any way for them to break out
+        # of the surrounding quoted string. We still reject:
+        #
+        # - Newline / carriage return characters, which would corrupt
+        #   $GITHUB_ENV when this step writes coverage_dir, tox_envs,
+        #   etc. (env-file-injection vector).
+        # - Absolute paths. The downstream 'uv pip install' uses a
+        #   './<prefix>[extras]' form to disambiguate a local path
+        #   from a PyPI package name; an absolute prefix would render
+        #   as './/abs/path' which is not the validated directory.
+        path_prefix_input="$INPUT_PATH_PREFIX"
+        case "$path_prefix_input" in
+          *$'\n'* | *$'\r'*)
+            echo 'Error: path_prefix contains newline or carriage' \
+              'return characters ❌' >&2
+            exit 1
+            ;;
+          /*)
+            echo 'Error: path_prefix must be a relative path ❌' >&2
+            echo "Provided: '$path_prefix_input'" >&2
+            exit 1
+            ;;
+        esac
         # Verify path_prefix is a valid directory path
         if [ ! -d "$path_prefix_input" ]; then
           echo 'Error: invalid path/prefix to project directory ❌'; exit 1
         fi
+        # Persist for downstream steps that read inputs from env.
+        echo "path_prefix=$path_prefix_input" >> "$GITHUB_ENV"
 
         # Derive the default tox env name (and the slug used for
         # coverage/artefact paths) from the major.minor pair only,
@@ -196,7 +230,7 @@ runs:
         # Testing with TOX
         if [ "f$tox_tests_lower" = 'ftrue' ]; then
           echo 'Using tox to perform tests 💬'
-          if [ -z "${{ inputs.tox_envs }}" ]; then
+          if [ -z "$INPUT_TOX_ENVS" ]; then
             echo 'Using tox environment derived from matrix Python version'
             echo "Using current matrix python version: $tox_envs"
           else
@@ -208,7 +242,7 @@ runs:
             # interpolation. Allowed: letters, digits, '.', '_', '-',
             # spaces - sufficient for any legitimate tox env name and
             # space-separated list per the documented input contract.
-            tox_envs_input="${{ inputs.tox_envs }}"
+            tox_envs_input="$INPUT_TOX_ENVS"
             # Note: hold the regex in a variable. bash's [[ =~ ]]
             # parser tokenises the regex BEFORE applying it; an
             # unquoted space inside the inline regex (e.g. the ' -'
@@ -240,19 +274,37 @@ runs:
           echo "tox_envs=$tox_envs" >> "$GITHUB_ENV"
         fi
 
-        # Check/setup test path
-        if [ -n "${{ inputs.tests_path }}" ] && \
-          [ ! -d "${{ inputs.path_prefix }}/${{ inputs.tests_path }}" ]; then
+        # Check/setup test path. Read from env vars rather than
+        # '${{ inputs.X }}' interpolation so user-controlled values
+        # cannot break out of the surrounding quoted strings.
+        # $INPUT_TESTS_PATH is also constrained: it must not be
+        # absolute (we always join it under $path_prefix_input) and
+        # must not contain newlines (would corrupt $GITHUB_ENV).
+        tests_path_input="$INPUT_TESTS_PATH"
+        case "$tests_path_input" in
+          *$'\n'* | *$'\r'*)
+            echo 'Error: tests_path contains newline or carriage' \
+              'return characters ❌' >&2
+            exit 1
+            ;;
+          /*)
+            echo 'Error: tests_path must be a relative path ❌' >&2
+            echo "Provided: '$tests_path_input'" >&2
+            exit 1
+            ;;
+        esac
+        if [ -n "$tests_path_input" ] && \
+          [ ! -d "$path_prefix_input/$tests_path_input" ]; then
           echo 'Error: invalid path/prefix to test directory ❌'
-          echo "${{ inputs.path_prefix }}/${{ inputs.tests_path }}"; exit 1
+          echo "$path_prefix_input/$tests_path_input"; exit 1
         fi
-        if [ -n "${{ inputs.tests_path }}" ]; then
-          TESTS_PATH="${{ inputs.path_prefix }}/${{ inputs.tests_path }}"
+        if [ -n "$tests_path_input" ]; then
+          TESTS_PATH="$path_prefix_input/$tests_path_input"
         # Otherwise search/use common locations
-        elif [ -d "${{ inputs.path_prefix }}/test" ]; then
-          TESTS_PATH="${{ inputs.path_prefix }}/test"
-        elif [ -d "${{ inputs.path_prefix }}/tests" ]; then
-          TESTS_PATH="${{ inputs.path_prefix }}/tests"
+        elif [ -d "$path_prefix_input/test" ]; then
+          TESTS_PATH="$path_prefix_input/test"
+        elif [ -d "$path_prefix_input/tests" ]; then
+          TESTS_PATH="$path_prefix_input/tests"
         else
           echo 'Error: could not determine path to tests ❌'; exit 1
         fi
@@ -261,13 +313,20 @@ runs:
 
     - name: 'Validate and sanitize pytest arguments'
       shell: bash
+      env:
+        # Pass via env: rather than '${{ inputs.pytest_args }}'
+        # interpolation - the latter substitutes into the script
+        # source BEFORE bash executes and is a script-source-injection
+        # vector. With env: the value reaches bash as a normal
+        # environment variable and quoting is safe.
+        INPUT_PYTEST_ARGS: ${{ inputs.pytest_args }}
       run: |
         # Validate and sanitize pytest arguments
 
         # Ring-fence this validation from the rest of the environment
         set -euo pipefail
 
-        pytest_args_input="${{ inputs.pytest_args }}"
+        pytest_args_input="$INPUT_PYTEST_ARGS"
 
         if [ -z "$pytest_args_input" ]; then
           echo "No additional pytest arguments provided"
@@ -343,6 +402,8 @@ runs:
 
     - name: 'Discover or generate coverage configuration'
       shell: bash
+      env:
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Discover or generate coverage configuration
         #
@@ -371,7 +432,10 @@ runs:
         # setup.cfg-based, tox.ini-based, .coveragerc-based, or none).
         set -euo pipefail
 
-        prefix="${{ inputs.path_prefix }}"
+        # Read from $INPUT_PATH_PREFIX (env:) rather than via
+        # '${{ inputs.path_prefix }}' interpolation - quoting is
+        # safe regardless of the value's content.
+        prefix="$INPUT_PATH_PREFIX"
         coverage_config=""
         coverage_data_file_set="false"
 
@@ -540,6 +604,7 @@ runs:
       shell: bash
       env:
         UV_PYTHON_PREFERENCE: only-managed
+        INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
       run: |
         # Verify Python interpreter consistency
         # Diagnostic: surface any interpreter/stdlib mismatch immediately
@@ -568,11 +633,13 @@ runs:
         print(f"sys.base_prefix = {sys.base_prefix}")
         PY
 
-        # Sanity-check that the interpreter's advertised X.Y matches the
-        # version requested via inputs.python_version. We accept any
-        # patch level (uv resolves to the latest matching managed
+        # Sanity-check that the interpreter's advertised X.Y matches
+        # the version requested via $INPUT_PYTHON_VERSION (passed
+        # through the env: block on this step rather than via
+        # '${{ inputs.python_version }}' interpolation). We accept
+        # any patch level (uv resolves to the latest matching managed
         # build), but the major.minor must agree.
-        requested="${{ inputs.python_version }}"
+        requested="$INPUT_PYTHON_VERSION"
         actual="$(python -c \
           'import sys; print("%d.%d" % sys.version_info[:2])')"
         req_xy="$(echo "$requested" | awk -F. '{print $1"."$2}')"
@@ -619,6 +686,8 @@ runs:
         # (and any tox-managed envs via tox-uv) cannot drift onto a
         # different ambient interpreter.
         UV_PYTHON_PREFERENCE: only-managed
+        INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Performing tests [tox] using uvx
         # uvx provisions tox in an ephemeral environment per invocation.
@@ -632,7 +701,7 @@ runs:
         # to the latest-tox branch - which fails because tox>=4 has
         # dropped Python 3.8 support. Extract the major.minor pair
         # via parameter expansion and compare against that.
-        py_ver="${{ inputs.python_version }}"
+        py_ver="$INPUT_PYTHON_VERSION"
         py_ver_xy="$(echo "$py_ver" | awk -F. '{print $1"."$2}')"
         if [[ "$py_ver_xy" == "3.8" ]]; then
           echo 'Using tox<4.0.0 for Python 3.8 compatibility 💬'
@@ -651,16 +720,20 @@ runs:
         # into the script source) avoids any risk of script-source
         # injection.
         tox_envs_value="${tox_envs:-}"
+        # Read $INPUT_PATH_PREFIX from the env: block on this step
+        # rather than via '${{ inputs.path_prefix }}' interpolation,
+        # so the path can never close the surrounding quoted string.
+        path_prefix_input="$INPUT_PATH_PREFIX"
         if [ -n "$tox_envs_value" ]; then
           # Split on whitespace into an array so each env runs separately.
           IFS=' ' read -r -a tox_env_list <<< "$tox_envs_value"
           for ENV in "${tox_env_list[@]}"; do
-            echo "Running: tox -c ${{ inputs.path_prefix }}/tox.ini -e $ENV 💬"
-            "${tox_cmd[@]}" -c "${{ inputs.path_prefix }}/tox.ini" -e "$ENV"
+            echo "Running: tox -c $path_prefix_input/tox.ini -e $ENV 💬"
+            "${tox_cmd[@]}" -c "$path_prefix_input/tox.ini" -e "$ENV"
           done
         else
-          echo "Running: tox -c ${{ inputs.path_prefix }}/tox.ini 💬"
-          "${tox_cmd[@]}" -c "${{ inputs.path_prefix }}/tox.ini"
+          echo "Running: tox -c $path_prefix_input/tox.ini 💬"
+          "${tox_cmd[@]}" -c "$path_prefix_input/tox.ini"
         fi
 
     - name: 'Install project and test/dev dependencies [pytest]'
@@ -671,6 +744,7 @@ runs:
         # Belt-and-braces: keep uv pinned to managed Python so an
         # ambient interpreter cannot leak in here either.
         UV_PYTHON_PREFERENCE: only-managed
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Install project and test/dev dependencies via uv
 
@@ -689,26 +763,35 @@ runs:
         echo "Installing into interpreter: $PYTHON_BIN 💬"
         echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>} 💬"
         echo 'Install project and test/dev dependencies (before pytest install)'
-        if [ -f "${{ inputs.path_prefix }}/pyproject.toml" ]; then
-          echo "Source: ${{ inputs.path_prefix }}/pyproject.toml ⬇️"
+        # Read $INPUT_PATH_PREFIX from the env: block on this step
+        # rather than via '${{ inputs.path_prefix }}' interpolation;
+        # the earlier 'Setup action/environment' step has already
+        # validated the value (rejected absolute paths and control
+        # characters) so by the time we get here it is known-safe to
+        # quote and use directly.
+        path_prefix_input="$INPUT_PATH_PREFIX"
+        if [ -f "$path_prefix_input/pyproject.toml" ]; then
+          echo "Source: $path_prefix_input/pyproject.toml ⬇️"
           # First try to install with test dependencies
           # Note: ./ prefix is required to indicate local path, otherwise uv
-          # interprets the argument as a package name to download from PyPI
+          # interprets the argument as a package name to download from PyPI.
+          # path_prefix_input is validated to be a relative path so the
+          # './' prefix is always meaningful and never produces './/abs'.
           if uv pip install ${UV_EDITABLE_FLAG} \
-          "./${{ inputs.path_prefix }}[test,dev]"; then
+          "./${path_prefix_input}[test,dev]"; then
             echo 'Successfully installed test and dev dependencies ✅'
           elif uv pip install ${UV_EDITABLE_FLAG} \
-            "./${{ inputs.path_prefix }}[test]"; then
+            "./${path_prefix_input}[test]"; then
             echo 'Successfully installed test dependencies ✅'
           else
             echo 'Fallback: installing base package only ⚠️'
             uv pip install ${UV_EDITABLE_FLAG} \
-              "./${{ inputs.path_prefix }}"
+              "./${path_prefix_input}"
           fi
-        elif [ -f "${{ inputs.path_prefix }}/requirements.txt" ]; then
-          echo "Source: ${{ inputs.path_prefix }}/requirements.txt ⬇️"
+        elif [ -f "$path_prefix_input/requirements.txt" ]; then
+          echo "Source: $path_prefix_input/requirements.txt ⬇️"
           uv pip install \
-            -r "${{ inputs.path_prefix }}/requirements.txt"
+            -r "$path_prefix_input/requirements.txt"
         fi
 
         echo 'Installing: pytest, pytest-cov, coverage[toml] ⬇️'
@@ -728,6 +811,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Tests and coverage report [pytest]
 
@@ -788,19 +872,28 @@ runs:
         # intentionally unquoted to allow word splitting for multiple
         # arguments; this is safe because the earlier validation step
         # ensures only well-formed, safe arguments are present.
+        # Read $INPUT_PATH_PREFIX from the env: block (validated
+        # earlier) rather than via '${{ inputs.path_prefix }}'
+        # interpolation, and read tests_path from $tests_path which
+        # the setup step persisted to $GITHUB_ENV after validating
+        # the joined path is a real directory. VALIDATED_PYTEST_ARGS
+        # is intentionally unquoted to allow word splitting because
+        # the validation step already rejected anything but
+        # well-formed pytest tokens.
+        path_prefix_input="$INPUT_PATH_PREFIX"
         if [ "f$permit_fail_lower" = 'ftrue' ]; then
           echo 'Warning: flag set to permit test failures ⚠️'
           python -m pytest \
-            --rootdir="${{ inputs.path_prefix }}" \
+            --rootdir="$path_prefix_input" \
             "${coverage_flags[@]}" \
-            ${{ env.VALIDATED_PYTEST_ARGS }} \
-            ${{ env.tests_path }} || true
+            ${VALIDATED_PYTEST_ARGS:-} \
+            "$tests_path" || true
         else
           python -m pytest \
-            --rootdir="${{ inputs.path_prefix }}" \
+            --rootdir="$path_prefix_input" \
             "${coverage_flags[@]}" \
-            ${{ env.VALIDATED_PYTEST_ARGS }} \
-            ${{ env.tests_path }}
+            ${VALIDATED_PYTEST_ARGS:-} \
+            "$tests_path"
         fi
 
     - name: 'Upload test/coverage report'
