@@ -160,8 +160,17 @@ runs:
           echo 'Error: invalid path/prefix to project directory ❌'; exit 1
         fi
 
-        # The coverage report location will also use this environment variable
-        tox_envs=$(echo "py$python_version_input" | sed 's/\.//g')
+        # Derive the default tox env name (and the slug used for
+        # coverage/artefact paths) from the major.minor pair only,
+        # never from a full X.Y.Z. tox's conventional default env
+        # names are 'py312' / 'py313' etc.; passing the patch level
+        # would produce 'py3123' which no project pins by default
+        # and would silently route to a non-existent environment.
+        # awk extracts the first two dot-separated fields; sed then
+        # strips the dot to produce the conventional 'pyXY' form.
+        py_ver_xy="$(echo "$python_version_input" | \
+          awk -F. '{print $1"."$2}')"
+        tox_envs="$(echo "py$py_ver_xy" | sed 's/\.//g')"
         echo "tox_envs=$tox_envs" >> "$GITHUB_ENV"
 
         # Capture a filesystem-safe slug derived from python_version
