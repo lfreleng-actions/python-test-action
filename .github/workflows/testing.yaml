@@ -54,6 +54,12 @@ jobs:
       contents: read
     timeout-minutes: 12
     steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: 'audit'
+
       - name: "Checkout repository"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -168,6 +174,12 @@ jobs:
       NSS_NG_REPO: "ModeSevenIndustrialSolutions/python-nss-ng"
       NSS_NG_REF: "01543d576ed845b22edc0369182526e64e078331"
     steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: 'audit'
+
       - name: "Checkout repository (action under test)"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
