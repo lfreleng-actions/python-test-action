@@ -307,16 +307,42 @@ jobs:
           print(f"sys.base_prefix = {sys.base_prefix}")
           PY
           fi
-          if [ -f python-nss-ng/.venv/pyvenv.cfg ]; then
-            echo '---- python-nss-ng/.venv/pyvenv.cfg ----'
-            cat python-nss-ng/.venv/pyvenv.cfg
-            echo '----------------------------------------'
+          # The action provisions/activates the venv at workspace root
+          # (.venv), not under path_prefix. Resolve the actual venv via
+          # $VIRTUAL_ENV so this diagnostic reports useful state
+          # regardless of where the action created it.
+          pyvenv_cfg="${VIRTUAL_ENV:+$VIRTUAL_ENV/pyvenv.cfg}"
+          if [ -z "$pyvenv_cfg" ]; then
+            pyvenv_cfg=".venv/pyvenv.cfg"
+          fi
+          if [ -f "$pyvenv_cfg" ]; then
+            echo "---- $pyvenv_cfg ----"
+            cat "$pyvenv_cfg"
+            echo "----------------------------------------"
+          else
+            echo "No pyvenv.cfg found at $pyvenv_cfg"
           fi
           echo ""
           echo "=== Installed nss/python-nss-ng artefacts ==="
+          # The action does not install pip into the venv (uv replaces
+          # it), so 'python -m pip' is not always available. Detect
+          # availability first so a missing-pip case produces a
+          # meaningful message rather than masking as a missing package.
           if command -v python >/dev/null 2>&1; then
-            python -m pip show python-nss-ng || \
-              echo "python-nss-ng not visible to pip"
+            if python -m pip --version >/dev/null 2>&1; then
+              python -m pip show python-nss-ng || \
+                echo "python-nss-ng not visible to pip"
+            else
+              echo "pip is not available; falling back to importlib"
+              python - <<'PY' || true
+          import importlib.metadata as md
+          try:
+              dist = md.distribution("python-nss-ng")
+              print(f"python-nss-ng {dist.version} at {dist.locate_file('')}")
+          except md.PackageNotFoundError:
+              print("python-nss-ng not visible via importlib.metadata")
+          PY
+            fi
           fi
           echo ""
           echo "=== ldd of any built nss .so files ==="
