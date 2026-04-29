@@ -116,19 +116,49 @@ runs:
         echo "report_artefact_lower=$report_artefact_lower" >> "$GITHUB_ENV"
         echo "tox_tests_lower=$tox_tests_lower" >> "$GITHUB_ENV"
 
-        if [ -z "${{ inputs.python_version }}" ]; then
+        # Validate inputs.python_version against a strict X.Y or X.Y.Z
+        # form before any further use. The value flows into filesystem
+        # paths (coverage_dir, generated .coveragerc location), the
+        # default artefact name, and gets persisted to $GITHUB_ENV via
+        # tox_envs / coverage_slug. A strict numeric / dotted pattern
+        # closes any window for path-injection or env-file-injection
+        # via crafted python_version values.
+        python_version_input="${{ inputs.python_version }}"
+        if [ -z "$python_version_input" ]; then
           echo 'Error: Python version was not provided ❌'; exit 1
-        else
-          echo "Using Python: ${{ inputs.python_version }} 🐍"
         fi
+        py_ver_re='^[0-9]+\.[0-9]+(\.[0-9]+)?$'
+        if [[ ! "$python_version_input" =~ $py_ver_re ]]; then
+          echo 'Error: invalid python_version ❌' >&2
+          echo "Provided: '$python_version_input'" >&2
+          echo "Expected pattern: X.Y or X.Y.Z (digits and dots only)" >&2
+          exit 1
+        fi
+        echo "Using Python: $python_version_input 🐍"
 
+        # Validate inputs.path_prefix. The directory-existence test
+        # below catches obvious typos but does not block a
+        # path_prefix containing newlines or carriage returns - which,
+        # if present, would be carried into $coverage_config and
+        # could perform $GITHUB_ENV injection (creating arbitrary
+        # additional environment variables) when written via
+        # 'echo coverage_config=$coverage_config >> $GITHUB_ENV'.
+        # Reject control characters explicitly.
+        path_prefix_input="${{ inputs.path_prefix }}"
+        case "$path_prefix_input" in
+          *$'\n'* | *$'\r'*)
+            echo 'Error: path_prefix contains newline or carriage' \
+              'return characters ❌' >&2
+            exit 1
+            ;;
+        esac
         # Verify path_prefix is a valid directory path
-        if [ ! -d "${{ inputs.path_prefix }}" ]; then
+        if [ ! -d "$path_prefix_input" ]; then
           echo 'Error: invalid path/prefix to project directory ❌'; exit 1
         fi
 
         # The coverage report location will also use this environment variable
-        tox_envs=$(echo "py${{ inputs.python_version }}" | sed 's/\.//g')
+        tox_envs=$(echo "py$python_version_input" | sed 's/\.//g')
         echo "tox_envs=$tox_envs" >> "$GITHUB_ENV"
 
         # Capture a filesystem-safe slug derived from python_version
@@ -672,34 +702,48 @@ runs:
         # Tests and coverage report [pytest]
 
         # Setup XML coverage report for upload as artefact
+        #
+        # We build coverage_flags as a bash ARRAY rather than a
+        # space-separated string for two reasons:
+        #
+        #   1. $coverage_config is read from the shell environment at
+        #      runtime (not via "${{ env.coverage_config }}" expression
+        #      interpolation into the script source) so that a path
+        #      containing spaces, quotes or shell metacharacters cannot
+        #      alter the generated shell script.
+        #   2. Array expansion with "${coverage_flags[@]}" preserves
+        #      argument boundaries even when individual elements
+        #      contain spaces, where unquoted string expansion would
+        #      word-split them.
+        #
+        # A bare '--cov' (no package argument) is required to actually
+        # enable pytest-cov's collection. Without it, the subsequent
+        # '--cov-report=xml:...' is a no-op for any consumer whose
+        # project config does not already put '--cov=<package>' in
+        # addopts - producing the 'No files were found with the
+        # provided path' artefact-upload warning. With '--cov' alone,
+        # pytest-cov falls back to the [coverage:run] /
+        # [tool.coverage.run] source list from the --cov-config file
+        # (or, if nothing is configured, collects against everything
+        # imported during the run). Consumers that DO put '--cov=foo'
+        # in addopts continue to work unchanged: pytest-cov merges the
+        # bare '--cov' with the addopts value.
+        #
+        # --cov-config is set to whatever the earlier discovery step
+        # resolved: a real project-supplied config when available
+        # (setup.cfg / tox.ini / pyproject.toml / .coveragerc),
+        # otherwise the auto-generated fallback under /tmp. This means
+        # projects without pyproject.toml (e.g. requirements.txt-only)
+        # work without the --cov-config flag ever pointing at a
+        # missing file.
+        coverage_flags=()
         if [ "f$report_artefact_lower" = 'ftrue' ]; then
-          # A bare '--cov' (no package argument) is required to
-          # actually enable pytest-cov's collection. Without it, the
-          # subsequent '--cov-report=xml:...' is a no-op for any
-          # consumer whose project config does not already put
-          # '--cov=<package>' in addopts - producing the 'No files
-          # were found with the provided path' artefact-upload
-          # warning. With '--cov' alone, pytest-cov falls back to the
-          # [coverage:run] / [tool.coverage.run] source list from the
-          # --cov-config file (or, if nothing is configured, collects
-          # against everything imported during the run). Consumers
-          # that DO put '--cov=foo' in addopts continue to work
-          # unchanged: pytest-cov merges the bare '--cov' with the
-          # addopts value.
-          #
-          # --cov-config is set to whatever the earlier discovery
-          # step resolved: a real project-supplied config when
-          # available (setup.cfg / tox.ini / pyproject.toml /
-          # .coveragerc), otherwise the auto-generated fallback under
-          # /tmp. This means projects without pyproject.toml (e.g.
-          # requirements.txt-only) work without the --cov-config flag
-          # ever pointing at a missing file.
-          coverage_flags="--cov \
-          --cov-report=term-missing \
-          --cov-report=xml:${coverage_dir}/coverage.xml \
-          --cov-config=${{ env.coverage_config }}"
-        else
-          coverage_flags=""
+          coverage_flags=(
+            --cov
+            --cov-report=term-missing
+            "--cov-report=xml:${coverage_dir}/coverage.xml"
+            "--cov-config=${coverage_config}"
+          )
         fi
 
         echo "Running tests in: ${{ env.tests_path }} 🧪"
@@ -707,23 +751,24 @@ runs:
         # console script so test execution always uses the interpreter
         # that the install step targeted, regardless of which 'pytest'
         # binary happens to come first on PATH.
+        #
+        # coverage_flags is expanded as "${coverage_flags[@]}" so each
+        # array element is preserved as a single argument even if a
+        # path inside it contains spaces. VALIDATED_PYTEST_ARGS is
+        # intentionally unquoted to allow word splitting for multiple
+        # arguments; this is safe because the earlier validation step
+        # ensures only well-formed, safe arguments are present.
         if [ "f$permit_fail_lower" = 'ftrue' ]; then
           echo 'Warning: flag set to permit test failures ⚠️'
-          # Note: VALIDATED_PYTEST_ARGS is intentionally unquoted to allow word
-          # splitting for multiple arguments. This is safe because validation
-          # logic ensures only well-formed, safe arguments are present.
           python -m pytest \
             --rootdir="${{ inputs.path_prefix }}" \
-            $coverage_flags \
+            "${coverage_flags[@]}" \
             ${{ env.VALIDATED_PYTEST_ARGS }} \
             ${{ env.tests_path }} || true
         else
-          # Note: VALIDATED_PYTEST_ARGS is intentionally unquoted to allow word
-          # splitting for multiple arguments. This is safe because validation
-          # logic ensures only well-formed, safe arguments are present.
           python -m pytest \
             --rootdir="${{ inputs.path_prefix }}" \
-            $coverage_flags \
+            "${coverage_flags[@]}" \
             ${{ env.VALIDATED_PYTEST_ARGS }} \
             ${{ env.tests_path }}
         fi
