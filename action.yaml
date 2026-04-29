@@ -157,7 +157,16 @@ runs:
             # spaces - sufficient for any legitimate tox env name and
             # space-separated list per the documented input contract.
             tox_envs_input="${{ inputs.tox_envs }}"
-            if [[ ! "$tox_envs_input" =~ ^[A-Za-z0-9_. -]+$ ]]; then
+            # Note: hold the regex in a variable. bash's [[ =~ ]]
+            # parser tokenises the regex BEFORE applying it; an
+            # unquoted space inside the inline regex (e.g. the ' -'
+            # at the end of '[A-Za-z0-9_. -]') confuses the parser
+            # and produces 'syntax error in conditional expression'.
+            # Storing the pattern in $tox_envs_re and referencing it
+            # unquoted on the right-hand side of =~ keeps the regex
+            # as a single token while preserving its semantics.
+            tox_envs_re='^[A-Za-z0-9_. -]+$'
+            if [[ ! "$tox_envs_input" =~ $tox_envs_re ]]; then
               echo "Error: invalid characters in tox_envs ❌" >&2
               echo "Allowed: letters, digits, '.', '_', '-', spaces" >&2
               exit 1
