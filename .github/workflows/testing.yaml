@@ -140,9 +140,9 @@ jobs:
   # action rather than upstream churn. Bump the pin deliberately
   # when validating against a newer python-nss-ng baseline.
   #
-  # This job runs in parallel to the lightweight 'tests' job above
-  # and is intentionally heavier (full Python matrix, native build,
-  # apt-installed NSS dependencies). It is not a replacement.
+  # This job runs in parallel to the lightweight 'standard-tests' job
+  # above and is intentionally heavier (full Python matrix, native
+  # build, apt-installed NSS dependencies). It is not a replacement.
   regression-tests:
     # yamllint disable-line rule:line-length
     name: "python-nss-ng (${{ matrix.runs-on }} / Py${{ matrix.python-version }})"
