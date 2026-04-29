@@ -157,9 +157,20 @@ runs:
             # spaces - sufficient for any legitimate tox env name and
             # space-separated list per the documented input contract.
             tox_envs_input="${{ inputs.tox_envs }}"
-            if [[ ! "$tox_envs_input" =~ ^[A-Za-z0-9_.\ -]+$ ]]; then
+            if [[ ! "$tox_envs_input" =~ ^[A-Za-z0-9_. -]+$ ]]; then
               echo "Error: invalid characters in tox_envs ❌" >&2
               echo "Allowed: letters, digits, '.', '_', '-', spaces" >&2
+              exit 1
+            fi
+            # Collapse runs of whitespace and trim leading/trailing
+            # spaces. A whitespace-only value (e.g. '   ') would
+            # otherwise pass the regex above, satisfy '-n' downstream
+            # in the run step, but split into an empty array - silently
+            # skipping the entire tox invocation. Reject explicitly.
+            tox_envs_input="$(echo "$tox_envs_input" | xargs)"
+            if [ -z "$tox_envs_input" ]; then
+              echo "Error: tox_envs contains no environment names ❌" >&2
+              echo "Provide at least one whitespace-separated env name" >&2
               exit 1
             fi
             tox_envs="$tox_envs_input"
