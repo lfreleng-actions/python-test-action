@@ -860,7 +860,15 @@ runs:
           )
         fi
 
-        echo "Running tests in: ${{ env.tests_path }} 🧪"
+        # Read tests_path from the runtime shell environment rather
+        # than via "${{ env.tests_path }}" expression interpolation.
+        # tests_path was persisted to $GITHUB_ENV by the setup step
+        # after validation, but the value ultimately derives from
+        # user-controlled inputs (path_prefix + tests_path); reading
+        # via $tests_path keeps the value out of the script source
+        # and closes the last script-source-injection vector in this
+        # step.
+        echo "Running tests in: $tests_path 🧪"
         # Invoke pytest via 'python -m pytest' rather than the 'pytest'
         # console script so test execution always uses the interpreter
         # that the install step targeted, regardless of which 'pytest'
