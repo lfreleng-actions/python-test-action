@@ -148,8 +148,22 @@ runs:
             echo 'Using tox environment derived from matrix Python version'
             echo "Using current matrix python version: $tox_envs"
           else
-            tox_envs="${{ inputs.tox_envs }}"
-            echo "Testing with tox environments: ${{ inputs.tox_envs }} 💬"
+            # Validate inputs.tox_envs BEFORE writing it to $GITHUB_ENV.
+            # tox_envs is user-controlled input; without this check a value
+            # containing newlines or shell metacharacters could perform
+            # env-file injection via $GITHUB_ENV (creating arbitrary
+            # additional environment variables) or break later shell
+            # interpolation. Allowed: letters, digits, '.', '_', '-',
+            # spaces - sufficient for any legitimate tox env name and
+            # space-separated list per the documented input contract.
+            tox_envs_input="${{ inputs.tox_envs }}"
+            if [[ ! "$tox_envs_input" =~ ^[A-Za-z0-9_.\ -]+$ ]]; then
+              echo "Error: invalid characters in tox_envs ❌" >&2
+              echo "Allowed: letters, digits, '.', '_', '-', spaces" >&2
+              exit 1
+            fi
+            tox_envs="$tox_envs_input"
+            echo "Testing with tox environments: $tox_envs 💬"
           fi
           echo "tox_envs=$tox_envs" >> "$GITHUB_ENV"
         fi
@@ -429,17 +443,16 @@ runs:
           tox_cmd=(uvx --python "$py_ver" --with tox-uv tox)
         fi
 
-        tox_envs_value="${{ env.tox_envs }}"
+        # Read tox_envs from the shell environment rather than via GitHub
+        # Actions expression interpolation. The earlier 'Setup
+        # action/environment' step has already validated inputs.tox_envs
+        # against the same regex BEFORE writing it to $GITHUB_ENV, so by
+        # the time we get here the value is known-safe. Using the env
+        # var directly (rather than re-interpolating "${{ env.tox_envs }}"
+        # into the script source) avoids any risk of script-source
+        # injection.
+        tox_envs_value="${tox_envs:-}"
         if [ -n "$tox_envs_value" ]; then
-          # Validate tox_envs to permit only safe characters before
-          # splitting; tox env names use [A-Za-z0-9_.-] and are
-          # space-separated per the documented input contract.
-          if [[ ! "$tox_envs_value" =~ ^[A-Za-z0-9_. -]+$ ]]; then
-            echo "Error: invalid characters in tox_envs ❌" >&2
-            echo "Allowed: letters, digits, '.', '_', '-', spaces" >&2
-            exit 1
-          fi
-
           # Split on whitespace into an array so each env runs separately.
           IFS=' ' read -r -a tox_env_list <<< "$tox_envs_value"
           for ENV in "${tox_env_list[@]}"; do
@@ -521,7 +534,20 @@ runs:
 
         # Setup XML coverage report for upload as artefact
         if [ "f$report_artefact_lower" = 'ftrue' ]; then
-          coverage_flags="--cov-report=term-missing \
+          # Note: a bare '--cov' (no package argument) is required to
+          # actually enable pytest-cov's collection. Without it, the
+          # subsequent '--cov-report=xml:...' is a no-op for any
+          # consumer whose pyproject.toml does not already put
+          # '--cov=<package>' in [tool.pytest.ini_options].addopts -
+          # producing the 'No files were found with the provided
+          # path' artefact-upload warning. With '--cov' alone,
+          # pytest-cov falls back to [tool.coverage.run] source = [...]
+          # from the --cov-config file, which every well-configured
+          # project already sets. Consumers that DO put '--cov=foo'
+          # in addopts continue to work unchanged: pytest-cov merges
+          # the bare '--cov' with the addopts value.
+          coverage_flags="--cov \
+          --cov-report=term-missing \
           --cov-report=xml:/tmp/coverage-$tox_envs/coverage.xml \
           --cov-config=${{ inputs.path_prefix }}/pyproject.toml"
         else

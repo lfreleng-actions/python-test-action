@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Action test/validation workflow
-name: "Test GitHub Action 🧪"
+name: "Action Tests"
 
 # yamllint disable-line rule:truthy
 on:
@@ -14,6 +14,13 @@ on:
     branches: ["main"]
 
 permissions: {}
+
+# Cancel any in-progress runs of this workflow on the same ref when a new
+# commit is pushed. Pull request updates trigger a fresh run, so this keeps
+# the queue tidy and ensures only the latest revision's results are visible.
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
 
 env:
   python_version: "3.12"
@@ -34,8 +41,8 @@ jobs:
   #   https://github.com/ModeSevenIndustrialSolutions/python-nss-ng/actions/runs/24763417356/job/72452664716  # arm64
   #   https://github.com/ModeSevenIndustrialSolutions/python-nss-ng/actions/runs/24763417356/job/72452544137  # x64
   # yamllint enable rule:line-length
-  tests:
-    name: "Run Tests 🧪 (${{ matrix.runs-on }})"
+  standard-tests:
+    name: "test-python-project (${{ matrix.runs-on }})"
     runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
@@ -136,9 +143,9 @@ jobs:
   # This job runs in parallel to the lightweight 'tests' job above
   # and is intentionally heavier (full Python matrix, native build,
   # apt-installed NSS dependencies). It is not a replacement.
-  regression-python-nss-ng:
+  regression-tests:
     # yamllint disable-line rule:line-length
-    name: "Regression: python-nss-ng (${{ matrix.runs-on }} / Py${{ matrix.python-version }})"
+    name: "python-nss-ng (${{ matrix.runs-on }} / Py${{ matrix.python-version }})"
     runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
