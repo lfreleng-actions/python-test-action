@@ -186,6 +186,12 @@ runs:
             echo "Provided: '$path_prefix_input'" >&2
             exit 1
             ;;
+          ..|../*|*/..|*/../*)
+            echo 'Error: path_prefix must not contain '"'..'"' path' \
+              'components ❌' >&2
+            echo "Provided: '$path_prefix_input'" >&2
+            exit 1
+            ;;
         esac
         # Verify path_prefix is a valid directory path
         if [ ! -d "$path_prefix_input" ]; then
@@ -289,6 +295,12 @@ runs:
             ;;
           /*)
             echo 'Error: tests_path must be a relative path ❌' >&2
+            echo "Provided: '$tests_path_input'" >&2
+            exit 1
+            ;;
+          ..|../*|*/..|*/../*)
+            echo 'Error: tests_path must not contain '"'..'"' path' \
+              'components ❌' >&2
             echo "Provided: '$tests_path_input'" >&2
             exit 1
             ;;
