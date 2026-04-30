@@ -178,7 +178,7 @@ jobs:
         uses: ./
         with:
           python_version: ${{ env.python_version }}
-          path_prefix: "tests/fixtures/${{ matrix.fixture }}"
+          path_prefix: ".fixtures/${{ matrix.fixture }}"
           tests_path: "tests"
           # yamllint disable-line rule:line-length
           artefact_name: "coverage-fixtures-${{ matrix.fixture }}-coverage"
@@ -241,7 +241,7 @@ jobs:
               echo "FAIL: coverage line-rate is zero for ${FIXTURE} ❌"
               echo "This indicates the action did not configure"
               echo "pytest-cov correctly for this project shape."
-              echo "See tests/fixtures/README.md and issue #138."
+              echo "See .fixtures/README.md and issue #138."
               exit 1
               ;;
           esac

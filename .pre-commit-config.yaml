@@ -12,7 +12,7 @@ ci:
 
     Signed-off-by: pre-commit-ci[bot] <pre-commit-ci@users.noreply.github.com>
 
-exclude: "^docs/conf.py|^tests/fixtures/"
+exclude: '^docs/conf\.py|^\.fixtures/'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
