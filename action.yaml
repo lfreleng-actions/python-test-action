@@ -694,7 +694,7 @@ runs:
         else:
             print(
                 "Warning: VIRTUAL_ENV is not set; skipping prefix "
-                "consistency check ⚠\ufe0f",
+                "consistency check ⚠️",
                 file=sys.stderr,
             )
         PY
@@ -860,6 +860,27 @@ runs:
           echo "Source: $path_prefix_input/requirements.txt ⬇️"
           uv pip install \
             -r "$path_prefix_input/requirements.txt"
+        elif [ -f "$path_prefix_input/setup.py" ] || \
+             [ -f "$path_prefix_input/setup.cfg" ]; then
+          # Legacy setuptools-style projects without pyproject.toml.
+          # Install the local directory directly so 'src/' layouts and
+          # any 'tests/conftest.py' that imports from the package work
+          # at test time. uv accepts the same './<prefix>' form here
+          # as for pyproject-based projects.
+          if [ -f "$path_prefix_input/setup.py" ]; then
+            echo "Source: $path_prefix_input/setup.py ⬇️"
+          else
+            echo "Source: $path_prefix_input/setup.cfg ⬇️"
+          fi
+          uv pip install ${UV_EDITABLE_FLAG} \
+            "./${path_prefix_input}"
+        else
+          echo 'Warning: no pyproject.toml, requirements.txt,' \
+            'setup.py or setup.cfg found under' \
+            "'$path_prefix_input' ⚠️"
+          echo 'Skipping project install; tests will run against' \
+            'pytest tooling only - imports of the project package' \
+            'may fail.'
         fi
 
         echo 'Installing: pytest, pytest-cov, coverage[toml] ⬇️'
