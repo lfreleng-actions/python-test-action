@@ -649,11 +649,54 @@ runs:
         fi
 
         python - <<'PY'
+        import os
         import sys
+
         print(f"sys.executable  = {sys.executable}")
         print(f"sys.version     = {sys.version}")
         print(f"sys.prefix      = {sys.prefix}")
         print(f"sys.base_prefix = {sys.base_prefix}")
+
+        # Assert sys.prefix matches the activated venv. uv exports
+        # VIRTUAL_ENV; sys.prefix should resolve to the same path,
+        # otherwise pip-installed packages will land in a different
+        # site-packages from the one 'python -m pytest' will import
+        # from - the exact mismatch this diagnostic step exists to
+        # catch.
+        venv = os.environ.get("VIRTUAL_ENV")
+        if venv:
+            v = os.path.realpath(venv)
+            p = os.path.realpath(sys.prefix)
+            if v != p:
+                print(
+                    f"Error: sys.prefix ({p}) does not match "
+                    f"VIRTUAL_ENV ({v}) ❌",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            # In a venv, sys.base_prefix points at the underlying
+            # managed interpreter and MUST differ from sys.prefix.
+            # Equality means we are running the base interpreter
+            # directly, with no venv isolation.
+            b = os.path.realpath(sys.base_prefix)
+            if b == p:
+                print(
+                    "Error: sys.base_prefix equals sys.prefix; "
+                    "interpreter is not running inside the activated "
+                    "venv ❌",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            print(
+                f"Interpreter prefix OK: sys.prefix matches "
+                f"VIRTUAL_ENV ({v}) ✅"
+            )
+        else:
+            print(
+                "Warning: VIRTUAL_ENV is not set; skipping prefix "
+                "consistency check ⚠\ufe0f",
+                file=sys.stderr,
+            )
         PY
 
         # Sanity-check that the interpreter's advertised X.Y matches
