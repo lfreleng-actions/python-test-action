@@ -562,9 +562,132 @@ runs:
             "data_file ⚠️"
           echo "Tests sensitive to file system content may break"
           echo "Set data_file in your coverage config to avoid this"
+          # Mirror the warning into the job summary so users see it
+          # without having to open the job log. Append rather than
+          # overwrite - other steps may already have written to the
+          # summary, and later steps may write more.
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### ⚠️ Coverage configuration warning"
+              echo
+              echo "Discovered coverage config does not set" \
+                "\`data_file\`."
+              echo "Tests sensitive to filesystem content may break."
+              echo "Set \`data_file\` in your coverage config to" \
+                "avoid this."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        # Detect whether the consumer has already configured a
+        # coverage collection target. Two independent signals count:
+        #
+        #   1. The discovered coverage config sets a non-empty
+        #      [tool.coverage.run].source / [coverage:run] source.
+        #   2. The project's pytest config (pyproject.toml addopts,
+        #      pytest.ini, setup.cfg [tool:pytest], tox.ini
+        #      [pytest] / [testenv] passenv) already includes a
+        #      '--cov=<pkg>' (or bare '--cov') argument.
+        #
+        # The test step uses this signal to decide whether to inject
+        # a bare '--cov' onto the pytest command line. Injecting a
+        # bare '--cov' alongside an existing '--cov=<pkg>' in addopts
+        # is NOT transparent: pytest-cov resolves the union via
+        # [tool.coverage.run].source, and a path-based source list
+        # (e.g. source = ["src"]) silently fails to match for
+        # non-editable installs. See issue #138 for the regression
+        # this guards against.
+        coverage_source_configured="false"
+        if [ -n "$coverage_config" ] && [ -f "$coverage_config" ]; then
+          # Match TOML-form 'source = [...]' under [tool.coverage.run]
+          # OR INI-form 'source =' under [coverage:run] / [run]. We
+          # are deliberately permissive here: any non-empty value
+          # counts. coverage.py treats an empty source list the same
+          # as 'no source set', so the regex requires at least one
+          # non-whitespace character after the '='.
+          if grep -qE \
+              '^[[:space:]]*source[[:space:]]*=[[:space:]]*[^[:space:]]' \
+              "$coverage_config"; then
+            coverage_source_configured="true"
+          fi
+        fi
+
+        cov_in_addopts="false"
+        # Probe each pytest config file in turn; first match wins.
+        # The patterns look for '--cov' as a bare flag or as
+        # '--cov=<value>'. The leading non-word boundary ('[^A-Za-z0-9_-]'
+        # or start-of-token) avoids matching '--cov-report' /
+        # '--cov-config' / '--cov-fail-under' which all begin with
+        # '--cov' but do not configure a collection target.
+        for cfg in \
+          "$prefix/pyproject.toml" \
+          "$prefix/pytest.ini" \
+          "$prefix/setup.cfg" \
+          "$prefix/tox.ini"; do
+          [ -f "$cfg" ] || continue
+          if grep -qE \
+              '(^|[^A-Za-z0-9_-])--cov(=|[[:space:]]|"|$)' \
+              "$cfg"; then
+            cov_in_addopts="true"
+            break
+          fi
+        done
+
+        if [ "$coverage_source_configured" = "true" ] || \
+           [ "$cov_in_addopts" = "true" ]; then
+          coverage_target_configured="true"
+          echo "Coverage collection target detected ✅" \
+            "(source=$coverage_source_configured" \
+            "addopts=$cov_in_addopts)"
+        else
+          coverage_target_configured="false"
+          # No project-supplied target. Emit a warning to BOTH the
+          # inline console output AND $GITHUB_STEP_SUMMARY so users
+          # see it without having to dig into the job log. The test
+          # step will inject a bare '--cov' as a best-effort fallback
+          # (collects against everything imported during the run),
+          # but explicit configuration produces more meaningful
+          # results.
+          echo "Warning: no coverage collection target configured ⚠️"
+          echo "Neither pytest addopts nor the coverage config sets" \
+            "a '--cov=<pkg>' or a non-empty" \
+            "'[tool.coverage.run].source' / '[coverage:run] source'."
+          echo "A bare '--cov' will be injected as a best-effort" \
+            "fallback; configure one of the above for predictable" \
+            "results."
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### ⚠️ Coverage collection target not configured"
+              echo
+              echo "Neither pytest \`addopts\` nor the coverage" \
+                "config sets a \`--cov=<pkg>\` or a non-empty" \
+                "\`[tool.coverage.run].source\` /" \
+                "\`[coverage:run] source\`."
+              echo
+              echo "The action will inject a bare \`--cov\` as a" \
+                "best-effort fallback. For predictable results," \
+                "add one of:"
+              echo
+              echo "- \`--cov=<package>\` to your pytest" \
+                "\`addopts\` (in \`pyproject.toml\`," \
+                "\`pytest.ini\`, \`setup.cfg\`, or \`tox.ini\`)"
+              echo "- \`source = [\"<package>\"]\` under" \
+                "\`[tool.coverage.run]\` in \`pyproject.toml\` (or" \
+                "the equivalent INI form)"
+              echo
+              echo "Prefer the package name over a directory path" \
+                "(e.g. \`[\"mypkg\"]\`, not \`[\"src\"]\`) so that" \
+                "coverage works for both editable and non-editable" \
+                "installs."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
         fi
 
         echo "coverage_config=$coverage_config" >> "$GITHUB_ENV"
+        echo "coverage_target_configured=$coverage_target_configured" \
+          >> "$GITHUB_ENV"
 
     - name: 'Check for tox configuration file'
       if: env.tox_tests_lower == 'true'
@@ -919,18 +1042,37 @@ runs:
         #      contain spaces, where unquoted string expansion would
         #      word-split them.
         #
-        # A bare '--cov' (no package argument) is required to actually
-        # enable pytest-cov's collection. Without it, the subsequent
-        # '--cov-report=xml:...' is a no-op for any consumer whose
-        # project config does not already put '--cov=<package>' in
-        # addopts - producing the 'No files were found with the
-        # provided path' artefact-upload warning. With '--cov' alone,
-        # pytest-cov falls back to the [coverage:run] /
-        # [tool.coverage.run] source list from the --cov-config file
-        # (or, if nothing is configured, collects against everything
-        # imported during the run). Consumers that DO put '--cov=foo'
-        # in addopts continue to work unchanged: pytest-cov merges the
-        # bare '--cov' with the addopts value.
+        # A bare '--cov' (no package argument) is injected ONLY when
+        # the consumer has not already configured a coverage collection
+        # target. The earlier 'Discover or generate coverage
+        # configuration' step computes $coverage_target_configured by
+        # probing both:
+        #
+        #   - the discovered coverage config for a non-empty
+        #     [tool.coverage.run].source / [coverage:run] source, and
+        #   - the project's pytest config (pyproject.toml addopts,
+        #     pytest.ini, setup.cfg, tox.ini) for an existing
+        #     '--cov=<pkg>' (or bare '--cov').
+        #
+        # When either signal is present, the consumer's existing
+        # configuration is honoured verbatim and we do NOT add a CLI
+        # '--cov'. Injecting a bare '--cov' alongside an addopts
+        # '--cov=<pkg>' is NOT transparent: pytest-cov resolves the
+        # union via [tool.coverage.run].source, and a path-based
+        # source list (e.g. source = ["src"]) silently fails to
+        # match for non-editable installs - producing a 'No data was
+        # collected' warning and 0% reported coverage even though
+        # every test passes. See issue #138.
+        #
+        # When neither signal is present, we inject a bare '--cov'
+        # as a best-effort fallback. With no source list to constrain
+        # it, pytest-cov collects against everything imported during
+        # the run. This preserves the v1.1.0 zero-config improvement
+        # for projects that haven't configured coverage at all,
+        # without breaking projects that have. The discovery step
+        # has already emitted a warning to both the console and
+        # $GITHUB_STEP_SUMMARY in this case, recommending explicit
+        # configuration for predictable results.
         #
         # --cov-config is set to whatever the earlier discovery step
         # resolved: a real project-supplied config when available
@@ -942,11 +1084,13 @@ runs:
         coverage_flags=()
         if [ "f$report_artefact_lower" = 'ftrue' ]; then
           coverage_flags=(
-            --cov
             --cov-report=term-missing
             "--cov-report=xml:${coverage_dir}/coverage.xml"
             "--cov-config=${coverage_config}"
           )
+          if [ "${coverage_target_configured:-false}" != "true" ]; then
+            coverage_flags=(--cov "${coverage_flags[@]}")
+          fi
         fi
 
         # Read tests_path from the runtime shell environment rather
