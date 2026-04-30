@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
 # Action test/validation workflow
-name: "Test GitHub Action 🧪"
+name: "Action Tests"
 
 # yamllint disable-line rule:truthy
 on:
@@ -15,18 +15,51 @@ on:
 
 permissions: {}
 
+# Cancel any in-progress runs of this workflow on the same ref when a new
+# commit is pushed. Pull request updates trigger a fresh run, so this keeps
+# the queue tidy and ensures only the latest revision's results are visible.
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
 env:
   python_version: "3.12"
 
 jobs:
   ### Test the GitHub Action in this Repository ###
-  tests:
-    name: "Run Tests 🧪"
-    runs-on: ubuntu-24.04
+  #
+  # Runs the action across both x64 and arm64 ubuntu-24.04 runners as a
+  # regression guard against a previously observed failure mode where
+  # actions/setup-python on these runners did not reliably bootstrap pip
+  # for Python 3.12, causing 'No module named pip' errors. The migration
+  # from pip to uv removes the dependency on actions/setup-python's pip
+  # provisioning, but we keep both architectures permanently in CI to
+  # detect any future regression in the underlying setup chain.
+  #
+  # Original failure references:
+  # yamllint disable rule:line-length
+  #   https://github.com/ModeSevenIndustrialSolutions/python-nss-ng/actions/runs/24763417356/job/72452664716  # arm64
+  #   https://github.com/ModeSevenIndustrialSolutions/python-nss-ng/actions/runs/24763417356/job/72452544137  # x64
+  # yamllint enable rule:line-length
+  standard-tests:
+    name: "test-python-project (${{ matrix.runs-on }})"
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
     permissions:
       contents: read
     timeout-minutes: 12
     steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: 'audit'
+
       - name: "Checkout repository"
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -87,3 +120,245 @@ jobs:
           # Check previous step failure
           echo "Error: previous step should have failed ❌"
           exit 1
+
+  ### Real-world regression matrix: python-nss-ng ###
+  #
+  # Runs the action against the full python-nss-ng repository across
+  # both x64 and arm64 runners and the full supported Python matrix
+  # (3.10 - 3.14). python-nss-ng is one of the more complex Python
+  # projects we exercise: it ships C extensions linking against
+  # system NSS/NSPR libraries, builds via meson-python, and historically
+  # surfaced two distinct classes of bug in this action that simpler
+  # fixtures missed:
+  #
+  #   1. pip -> uv interpreter mismatch on real packages with
+  #      [test,dev] extras + meson-python build
+  #      (uv 0.11.x mis-detected the interpreter's patch version,
+  #       installing pytest into a site-packages path the running
+  #       python could not find).
+  #   2. setup-python vs setup-uv patch-version disagreement on
+  #      Ubuntu noble + Python 3.12, producing a venv whose binary
+  #      advertised one patch level while loading stdlib from another;
+  #      this crashed CPython inside LogRecord.__init__.
+  #
+  # python-nss-ng is pinned to a known-good commit so that any
+  # regression detected here is attributable to changes in this
+  # action rather than upstream churn. Bump the pin deliberately
+  # when validating against a newer python-nss-ng baseline.
+  #
+  # This job runs in parallel to the lightweight 'standard-tests' job
+  # above and is intentionally heavier (full Python matrix, native
+  # build, apt-installed NSS dependencies). It is not a replacement.
+  regression-tests:
+    # yamllint disable-line rule:line-length
+    name: "python-nss-ng (${{ matrix.runs-on }} / Py${{ matrix.python-version }})"
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    env:
+      # Pinned python-nss-ng commit. Update this when validating
+      # against a newer baseline of the downstream project.
+      NSS_NG_REPO: "ModeSevenIndustrialSolutions/python-nss-ng"
+      NSS_NG_REF: "01543d576ed845b22edc0369182526e64e078331"
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository (action under test)"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: "action"
+
+      - name: "Checkout python-nss-ng at pinned commit"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: "${{ env.NSS_NG_REPO }}"
+          ref: "${{ env.NSS_NG_REF }}"
+          path: "python-nss-ng"
+
+      - name: "Install NSS/NSPR system dependencies"
+        working-directory: "python-nss-ng"
+        shell: bash
+        run: |
+          # Install apt-level NSS/NSPR build deps via the project's
+          # own Makefile target. Python-level deps are deliberately
+          # left to the action under test.
+          make deps-nss deps-test-system env-github-actions
+          # Refresh ldconfig cache so libnss/libnspr are discoverable
+          sudo ldconfig
+          # Export multi-arch library path for downstream steps.
+          LIB_PATH="/usr/lib"
+          LIB_PATH="${LIB_PATH}:/usr/lib/x86_64-linux-gnu"
+          LIB_PATH="${LIB_PATH}:/usr/lib/aarch64-linux-gnu"
+          echo "LD_LIBRARY_PATH=${LIB_PATH}" >> "$GITHUB_ENV"
+
+      - name: "Verify NSS libraries are discoverable"
+        shell: bash
+        run: |
+          # Verify NSS libraries are discoverable
+          echo "=== Library Path Diagnostics ==="
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
+          echo ""
+          echo "=== ldconfig cache (NSS / NSPR) ==="
+          ldconfig -p | grep -E '(nss|nspr)' || \
+            echo "NSS/NSPR not in ldconfig cache ⚠️"
+          echo ""
+          echo "=== pkg-config ==="
+          pkg-config --exists nss && \
+            echo "NSS: $(pkg-config --modversion nss) ✅" || \
+            echo "NSS not found by pkg-config ⚠️"
+          pkg-config --exists nspr && \
+            echo "NSPR: $(pkg-config --modversion nspr) ✅" || \
+            echo "NSPR not found by pkg-config ⚠️"
+
+      # Build python-nss-ng's meson tree before running pytest.
+      #
+      # python-nss-ng's test suite contains bare imports such as
+      # 'from deprecations import ...' / 'from nss_context import ...'
+      # / 'from secure_logging import ...' at module scope (e.g. in
+      # test/test_deprecations.py, test/test_secure_logging.py,
+      # test/test_zzz_nss_context.py). Those modules live at
+      # src/{deprecations,nss_context,secure_logging}.py and meson
+      # installs them under the 'nss' subpackage at install time, so
+      # they are NOT importable as top-level names from a plain
+      # 'uv pip install' of the project.
+      #
+      # The project's own conftest.py works around this by inserting
+      # the meson 'build/lib.<platform>-<X.Y>' directory into sys.path
+      # via util.get_build_dir() - but that directory only exists if
+      # an in-tree meson build has been performed. Without it, pytest
+      # collection fails with ModuleNotFoundError on those three test
+      # modules.
+      #
+      # python-nss-ng's own CI runs lfreleng-actions/python-build-action
+      # before invoking python-test-action, which produces the build
+      # tree as a side effect. Mirror that here so the regression job
+      # exercises the same end-to-end shape consumers actually use.
+      - name: "Build python-nss-ng (meson) Py${{ matrix.python-version }}"
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/python-build-action@38b9a4e7ee34e56d178f5bd248df52e41f7d496e # v1.0.6
+        with:
+          path_prefix: "python-nss-ng"
+          python_version: "${{ matrix.python-version }}"
+          # Build via the project's Makefile so meson is invoked the
+          # same way python-nss-ng's own CI invokes it. NSS apt deps
+          # are installed in the previous step, but re-running the
+          # idempotent target here keeps env-github-actions in sync.
+          make: "true"
+          make_args: "deps-nss env-github-actions"
+          # The action under test handles its own coverage/test
+          # artefact uploads; the build artefact is not needed here.
+          # yamllint disable-line rule:line-length
+          artefact_name: "regression-nss-ng-build-${{ matrix.runs-on }}-py${{ matrix.python-version }}"
+
+      - name: "Run action: python-nss-ng Py${{ matrix.python-version }}"
+        # Use the local checkout of the action under test rather than
+        # 'uses: ./' at workflow root, since the workflow root holds
+        # python-nss-ng's checkout in this job.
+        #
+        # PYTHONPATH note: python-nss-ng/test/{test_deprecations,
+        # test_secure_logging,test_zzz_nss_context}.py contain bare
+        # top-level imports ('from deprecations import ...' etc.)
+        # whose targets live at python-nss-ng/src/*.py. The project's
+        # own conftest.py works around this by walking up from CWD
+        # looking for 'meson.build' + 'build/' and inserting the
+        # discovered build dir into sys.path. That walk only succeeds
+        # when CWD == project root; in this regression job CWD is
+        # $GITHUB_WORKSPACE and meson.build lives one level below in
+        # python-nss-ng/, so the walk never finds it.
+        #
+        # Setting PYTHONPATH to python-nss-ng/src directly makes the
+        # bare imports resolve from source. We deliberately point at
+        # 'src' rather than at the meson build dir because 'src' is
+        # the canonical location and is always present after checkout.
+        #
+        uses: ./action
+        env:
+          PYTHONPATH: "${{ github.workspace }}/python-nss-ng/src"
+        with:
+          python_version: "${{ matrix.python-version }}"
+          path_prefix: "python-nss-ng"
+          tests_path: "test"
+          # yamllint disable-line rule:line-length
+          artefact_name: "regression-nss-ng-${{ matrix.runs-on }}-py${{ matrix.python-version }}-coverage"
+          report_artefact: "true"
+          github_token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: "Post-test diagnostics (on failure)"
+        if: failure()
+        shell: bash
+        run: |
+          # Post-test diagnostics
+          # Surface enough state to triage interpreter / install /
+          # link-time issues without rerunning the job manually.
+          echo "=== POST-TEST DIAGNOSTICS ==="
+          echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
+          echo "python on PATH: $(command -v python || true)"
+          if command -v python >/dev/null 2>&1; then
+            python - <<'PY' || true
+          import sys
+          print(f"sys.executable  = {sys.executable}")
+          print(f"sys.version     = {sys.version}")
+          print(f"sys.prefix      = {sys.prefix}")
+          print(f"sys.base_prefix = {sys.base_prefix}")
+          PY
+          fi
+          # The action provisions/activates the venv at workspace root
+          # (.venv), not under path_prefix. Resolve the actual venv via
+          # $VIRTUAL_ENV so this diagnostic reports useful state
+          # regardless of where the action created it.
+          pyvenv_cfg="${VIRTUAL_ENV:+$VIRTUAL_ENV/pyvenv.cfg}"
+          if [ -z "$pyvenv_cfg" ]; then
+            pyvenv_cfg=".venv/pyvenv.cfg"
+          fi
+          if [ -f "$pyvenv_cfg" ]; then
+            echo "---- $pyvenv_cfg ----"
+            cat "$pyvenv_cfg"
+            echo "----------------------------------------"
+          else
+            echo "No pyvenv.cfg found at $pyvenv_cfg"
+          fi
+          echo ""
+          echo "=== Installed nss/python-nss-ng artefacts ==="
+          # The action does not install pip into the venv (uv replaces
+          # it), so 'python -m pip' is not always available. Detect
+          # availability first so a missing-pip case produces a
+          # meaningful message rather than masking as a missing package.
+          if command -v python >/dev/null 2>&1; then
+            if python -m pip --version >/dev/null 2>&1; then
+              python -m pip show python-nss-ng || \
+                echo "python-nss-ng not visible to pip"
+            else
+              echo "pip is not available; falling back to importlib"
+              python - <<'PY' || true
+          import importlib.metadata as md
+          try:
+              dist = md.distribution("python-nss-ng")
+              print(f"python-nss-ng {dist.version} at {dist.locate_file('')}")
+          except md.PackageNotFoundError:
+              print("python-nss-ng not visible via importlib.metadata")
+          PY
+            fi
+          fi
+          echo ""
+          echo "=== ldd of any built nss .so files ==="
+          find python-nss-ng -name "*.so" 2>/dev/null | while read -r so; do
+            echo "--- $so ---"
+            ldd "$so" 2>&1 | grep -E "(nss|nspr|not found)" || true
+          done
