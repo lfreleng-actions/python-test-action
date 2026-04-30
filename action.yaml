@@ -585,177 +585,7 @@ runs:
           fi
         fi
 
-        # Detect whether the consumer has already configured a
-        # coverage collection target. Two independent signals count:
-        #
-        #   1. The discovered coverage config sets a non-empty
-        #      [tool.coverage.run].source / [coverage:run] source.
-        #   2. The project's pytest config (pyproject.toml addopts,
-        #      pytest.ini, setup.cfg [tool:pytest], tox.ini
-        #      [pytest] / [testenv] passenv) already includes a
-        #      '--cov=<pkg>' (or bare '--cov') argument.
-        #
-        # The test step uses this signal to decide whether to inject
-        # a bare '--cov' onto the pytest command line. Injecting a
-        # bare '--cov' alongside an existing '--cov=<pkg>' in addopts
-        # is NOT transparent: pytest-cov resolves the union via
-        # [tool.coverage.run].source, and a path-based source list
-        # (e.g. source = ["src"]) silently fails to match for
-        # non-editable installs. See issue #138 for the regression
-        # this guards against.
-        coverage_source_configured="false"
-        if [ -n "$coverage_config" ] && [ -f "$coverage_config" ]; then
-          # Match TOML-form 'source = [...]' under [tool.coverage.run]
-          # OR INI-form 'source =' under [coverage:run] / [run]. We
-          # are deliberately permissive here: any non-empty value
-          # counts. coverage.py treats an empty source list the same
-          # as 'no source set', so the regex requires at least one
-          # non-whitespace character after the '='.
-          if grep -qE \
-              '^[[:space:]]*source[[:space:]]*=[[:space:]]*[^[:space:]]' \
-              "$coverage_config"; then
-            coverage_source_configured="true"
-          fi
-        fi
-
-        cov_in_addopts="false"
-        # Probe each pytest config file in turn; first match wins.
-        # The patterns look for '--cov' as a bare flag or as
-        # '--cov=<value>'. The leading non-word boundary ('[^A-Za-z0-9_-]'
-        # or start-of-token) avoids matching '--cov-report' /
-        # '--cov-config' / '--cov-fail-under' which all begin with
-        # '--cov' but do not configure a collection target.
-        for cfg in \
-          "$prefix/pyproject.toml" \
-          "$prefix/pytest.ini" \
-          "$prefix/setup.cfg" \
-          "$prefix/tox.ini"; do
-          [ -f "$cfg" ] || continue
-          if grep -qE \
-              '(^|[^A-Za-z0-9_-])--cov(=|[[:space:]]|"|$)' \
-              "$cfg"; then
-            cov_in_addopts="true"
-            break
-          fi
-        done
-
-        if [ "$coverage_source_configured" = "true" ] || \
-           [ "$cov_in_addopts" = "true" ]; then
-          coverage_target_configured="true"
-          coverage_fallback_pkg=""
-          echo "Coverage collection target detected ✅" \
-            "(source=$coverage_source_configured" \
-            "addopts=$cov_in_addopts)"
-        else
-          coverage_target_configured="false"
-          # No project-supplied target. Try to derive the import name
-          # from the project's pyproject.toml [project].name so we can
-          # pass '--cov=<pkg>' as a best-effort fallback. A bare
-          # '--cov' is NOT sufficient on its own: for non-editable
-          # installs (the action default since v1.0.0), the project
-          # package lives under .venv/.../site-packages/<pkg>, and
-          # coverage.py without a source list does not measure code
-          # imported from site-packages. Passing '--cov=<pkg>'
-          # explicitly tells pytest-cov which package to track and
-          # works regardless of where the package executes from.
-          #
-          # Distribution name -> import name normalisation: PEP 503
-          # canonicalises distribution names by replacing runs of '-',
-          # '_', and '.' with a single '-' and lowercasing. Import
-          # names by convention use '_' rather than '-'. We translate
-          # '-' and '.' to '_' to recover the most likely import
-          # name. This is a heuristic - some distributions use a
-          # different import name from their distribution name (e.g.
-          # 'pillow' -> 'PIL') - but it covers the common case and
-          # keeps the fallback wholly local to the action without
-          # needing post-install introspection.
-          coverage_fallback_pkg=""
-          if [ -f "$prefix/pyproject.toml" ]; then
-            # Extract the [project].name value. The grep+sed pattern
-            # matches both 'name = "foo"' and "name = 'foo'" forms
-            # while ignoring commented lines and TOML keys named
-            # 'name' that appear under other tables (we limit the
-            # search to the first 'name =' line, which by TOML
-            # convention sits at the top of the [project] table).
-            # Two-stage extraction keeps each sed pattern within the
-            # 80-column limit. First stage strips the leading
-            # whitespace and 'name = '; second stage strips the
-            # surrounding quote and trailing content.
-            dist_name="$(\
-              grep -m1 -E \
-                '^[[:space:]]*name[[:space:]]*=[[:space:]]*[\"\x27]' \
-                "$prefix/pyproject.toml" \
-              | sed -E 's/^[[:space:]]*name[[:space:]]*=[[:space:]]*//' \
-              | sed -E 's/^[\"\x27]([^\"\x27]+)[\"\x27].*$/\1/' \
-            )"
-            if [ -n "$dist_name" ]; then
-              # Normalise to the conventional import-name form. Use
-              # sed rather than 'tr' for portability: BSD 'tr'
-              # interprets a literal '-' inside the source set as a
-              # range delimiter unless quoted, so 'tr -.\ _' is
-              # ambiguous on macOS runners. sed handles both.
-              coverage_fallback_pkg="$(\
-                echo "$dist_name" | sed -E 's/[-.]/_/g' \
-              )"
-            fi
-          fi
-          if [ -n "$coverage_fallback_pkg" ]; then
-            echo "Warning: no coverage collection target configured ⚠️"
-            echo "Will use derived package name '$coverage_fallback_pkg'" \
-              "as a best-effort fallback."
-          else
-            echo "Warning: no coverage collection target configured ⚠️"
-            echo "Could not derive package name; bare '--cov' will be" \
-              "injected (may collect zero data for non-editable" \
-              "installs)."
-          fi
-          echo "Neither pytest addopts nor the coverage config sets" \
-            "a '--cov=<pkg>' or a non-empty" \
-            "'[tool.coverage.run].source' / '[coverage:run] source'."
-          echo "Configure one of the above for predictable results."
-          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-            {
-              echo "### ⚠️ Coverage collection target not configured"
-              echo
-              echo "Neither pytest \`addopts\` nor the coverage" \
-                "config sets a \`--cov=<pkg>\` or a non-empty" \
-                "\`[tool.coverage.run].source\` /" \
-                "\`[coverage:run] source\`."
-              echo
-              if [ -n "$coverage_fallback_pkg" ]; then
-                echo "The action will pass" \
-                  "\`--cov=$coverage_fallback_pkg\` (derived from" \
-                  "\`[project].name\` in \`pyproject.toml\`) as a" \
-                  "best-effort fallback. For predictable results," \
-                  "add one of:"
-              else
-                echo "The action will inject a bare \`--cov\` as a" \
-                  "best-effort fallback (may collect zero data for" \
-                  "non-editable installs). For predictable results," \
-                  "add one of:"
-              fi
-              echo
-              echo "- \`--cov=<package>\` to your pytest" \
-                "\`addopts\` (in \`pyproject.toml\`," \
-                "\`pytest.ini\`, \`setup.cfg\`, or \`tox.ini\`)"
-              echo "- \`source = [\"<package>\"]\` under" \
-                "\`[tool.coverage.run]\` in \`pyproject.toml\` (or" \
-                "the equivalent INI form)"
-              echo
-              echo "Prefer the package name over a directory path" \
-                "(e.g. \`[\"mypkg\"]\`, not \`[\"src\"]\`) so that" \
-                "coverage works for both editable and non-editable" \
-                "installs."
-              echo
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-        fi
-
         echo "coverage_config=$coverage_config" >> "$GITHUB_ENV"
-        echo "coverage_target_configured=$coverage_target_configured" \
-          >> "$GITHUB_ENV"
-        echo "coverage_fallback_pkg=$coverage_fallback_pkg" \
-          >> "$GITHUB_ENV"
 
     - name: 'Check for tox configuration file'
       if: env.tox_tests_lower == 'true'
@@ -1086,6 +916,175 @@ runs:
         "$PYTHON_BIN" -c \
           'import pytest; print(f"pytest {pytest.__version__} OK")'
 
+        # Ensure 'tomllib' (or its 'tomli' predecessor) is available
+        # in the venv before the next step runs scripts/detect_coverage.py.
+        # tomllib joined the stdlib in Python 3.11; for matrix runs that
+        # request 3.10 or older, install the back-compat package 'tomli'
+        # so the script's import fallback succeeds. We deliberately use
+        # the activated venv's Python (not the runner's stock python3)
+        # to keep the action setup-uv-only - no actions/setup-python
+        # coupling that would re-introduce the Ubuntu 24 / Python 3.12
+        # ABI skew bug fixed in 6bf3e59.
+        if ! "$PYTHON_BIN" -c 'import tomllib' >/dev/null 2>&1; then
+          echo 'Installing: tomli (tomllib backport for Python <3.11) ⬇️'
+          uv pip install -q tomli
+        fi
+
+    - name: 'Detect coverage configuration'
+      if: env.tox_tests_lower != 'true'
+      shell: bash
+      env:
+        INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
+      run: |
+        # Detect coverage configuration
+        #
+        # Delegates to scripts/detect_coverage.py which uses tomllib
+        # (or its 'tomli' predecessor for Python <3.11) plus stdlib
+        # configparser to answer two independent questions about the
+        # consumer's project:
+        #
+        #   - cov_in_addopts:           does any pytest config supply
+        #                                '--cov' in addopts?
+        #   - coverage_source_configured: does the discovered coverage
+        #                                config set a non-empty
+        #                                [tool.coverage.run].source /
+        #                                [coverage:run] source /
+        #                                [run] source?
+        #
+        # And then derives:
+        #
+        #   - coverage_inject_cov:       'true' iff the action should
+        #                                add '--cov' to the pytest CLI
+        #                                (i.e. addopts has none).
+        #   - coverage_target_configured: 'true' iff EITHER signal is
+        #                                present (suppresses the
+        #                                missing-target warning below).
+        #   - coverage_fallback_pkg:     [project].name normalised to
+        #                                its conventional import name
+        #                                (lowercase, runs of -/_/.
+        #                                collapsed to '_'). Only set
+        #                                when injection happens AND no
+        #                                source list is configured.
+        #
+        # Implemented in Python rather than inline awk/grep because
+        # the detection has to handle TOML (multi-line lists, dotted
+        # tables, quoted strings with embedded '#' or ';', single vs
+        # double quotes) and INI (multi-line continuation, both '#'
+        # and ';' comments, namespaced sections like [coverage:run]
+        # vs bare [run]) correctly. Stdlib parsers do all of that
+        # natively. The script also fits within the GitHub Actions
+        # 21,000-character per-step expression length limit, which
+        # the equivalent inline awk pipeline did not.
+        #
+        # Runs AFTER 'Install project and test/dev dependencies' so
+        # the activated venv's interpreter is on PATH, matching
+        # inputs.python_version exactly. Running earlier would pick
+        # up whatever python3 is on PATH from sibling actions (e.g. a
+        # python-build-action invocation in our own regression matrix
+        # that uses actions/setup-python), which was the failure mode
+        # in the round-4 CI run.
+        set -euo pipefail
+
+        prefix="$INPUT_PATH_PREFIX"
+        script="$GITHUB_ACTION_PATH/scripts/detect_coverage.py"
+
+        if [ ! -f "$script" ]; then
+          echo "Error: detect_coverage.py not found at $script ❌" >&2
+          exit 1
+        fi
+
+        # Resolve the venv's Python from PATH. setup-uv prepended
+        # .venv/bin to PATH and exported VIRTUAL_ENV in an earlier
+        # step, so 'python' here is the same interpreter that
+        # 'Install project and test/dev dependencies' just installed
+        # pytest into and that 'Run tests' will use next. Note that
+        # the prior step's local $PYTHON_BIN does NOT survive into
+        # this step's environment, so we recompute via 'command -v'.
+        py="$(command -v python)"
+        if [ -z "$py" ]; then
+          echo "Error: 'python' not found on PATH; setup-uv" \
+            "should have activated the venv ❌" >&2
+          exit 1
+        fi
+
+        # The script prints KEY=VALUE pairs (one per line) on stdout.
+        # Capture them, log them for diagnostics, and append each line
+        # verbatim to $GITHUB_ENV so subsequent steps see the values.
+        env_lines="$("$py" "$script" "$prefix" "${coverage_config:-}")"
+        printf '%s\n' "$env_lines"
+        printf '%s\n' "$env_lines" >> "$GITHUB_ENV"
+
+        # Re-export each KEY=VALUE into the current shell so the
+        # warning emitter below can read coverage_target_configured
+        # and coverage_fallback_pkg without waiting for the next step.
+        while IFS='=' read -r key value; do
+          [ -n "$key" ] || continue
+          printf -v "$key" '%s' "$value"
+          export "$key"
+        done <<< "$env_lines"
+
+        if [ "${coverage_target_configured:-false}" = "true" ]; then
+          echo "Coverage collection target detected ✅" \
+            "(source=${coverage_source_configured:-false}" \
+            "addopts=${cov_in_addopts:-false})"
+          exit 0
+        fi
+
+        # No project-supplied target. Emit a warning to BOTH the
+        # inline console output and $GITHUB_STEP_SUMMARY so users see
+        # it without having to dig into the job log.
+        if [ -n "${coverage_fallback_pkg:-}" ]; then
+          echo "Warning: no coverage collection target configured ⚠️"
+          echo "Will use derived package name" \
+            "'${coverage_fallback_pkg}' as a best-effort fallback."
+        else
+          echo "Warning: no coverage collection target configured ⚠️"
+          echo "Could not derive package name; bare '--cov' will be" \
+            "injected (may collect zero data for non-editable" \
+            "installs)."
+        fi
+        echo "Neither pytest addopts nor the coverage config sets" \
+          "a '--cov=<pkg>' or a non-empty" \
+          "'[tool.coverage.run].source' / '[coverage:run] source'."
+        echo "Configure one of the above for predictable results."
+
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "### ⚠️ Coverage collection target not configured"
+            echo
+            echo "Neither pytest \`addopts\` nor the coverage" \
+              "config sets a \`--cov=<pkg>\` or a non-empty" \
+              "\`[tool.coverage.run].source\` /" \
+              "\`[coverage:run] source\`."
+            echo
+            if [ -n "${coverage_fallback_pkg:-}" ]; then
+              echo "The action will pass" \
+                "\`--cov=${coverage_fallback_pkg}\` (derived from" \
+                "\`[project].name\` in \`pyproject.toml\`) as a" \
+                "best-effort fallback. For predictable results," \
+                "add one of:"
+            else
+              echo "The action will inject a bare \`--cov\` as a" \
+                "best-effort fallback (may collect zero data for" \
+                "non-editable installs). For predictable results," \
+                "add one of:"
+            fi
+            echo
+            echo "- \`--cov=<package>\` to your pytest" \
+              "\`addopts\` (in \`pyproject.toml\`," \
+              "\`pytest.ini\`, \`setup.cfg\`, or \`tox.ini\`)"
+            echo "- \`source = [\"<package>\"]\` under" \
+              "\`[tool.coverage.run]\` in \`pyproject.toml\` (or" \
+              "the equivalent INI form)"
+            echo
+            echo "Prefer the package name over a directory path" \
+              "(e.g. \`[\"mypkg\"]\`, not \`[\"src\"]\`) so that" \
+              "coverage works for both editable and non-editable" \
+              "installs."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
     - name: 'Run tests and coverage report [pytest]'
       if: env.tox_tests_lower != 'true'
       shell: bash
@@ -1110,38 +1109,39 @@ runs:
         #      contain spaces, where unquoted string expansion would
         #      word-split them.
         #
-        # A bare '--cov' (no package argument) is injected ONLY when
-        # the consumer has not already configured a coverage collection
-        # target. The earlier 'Discover or generate coverage
-        # configuration' step computes $coverage_target_configured by
-        # probing both:
+        # The action adds '--cov' to the pytest CLI only when the
+        # consumer's pytest config does NOT already supply one. The
+        # earlier 'Detect coverage configuration' step encodes this
+        # decision in $coverage_inject_cov (computed by
+        # scripts/detect_coverage.py and persisted to $GITHUB_ENV):
         #
-        #   - the discovered coverage config for a non-empty
-        #     [tool.coverage.run].source / [coverage:run] source, and
-        #   - the project's pytest config (pyproject.toml addopts,
-        #     pytest.ini, setup.cfg, tox.ini) for an existing
-        #     '--cov=<pkg>' (or bare '--cov').
+        #   - 'false' when '--cov' was found in the project's pytest
+        #     config (pyproject.toml addopts, pytest.ini, setup.cfg,
+        #     tox.ini). Honouring the consumer's existing entry
+        #     verbatim avoids the issue #138 regression: a CLI bare
+        #     '--cov' alongside an addopts '--cov=<pkg>' makes
+        #     pytest-cov resolve the union via
+        #     [tool.coverage.run].source, and a path-based source
+        #     list silently fails to match for non-editable installs.
         #
-        # When either signal is present, the consumer's existing
-        # configuration is honoured verbatim and we do NOT add a CLI
-        # '--cov'. Injecting a bare '--cov' alongside an addopts
-        # '--cov=<pkg>' is NOT transparent: pytest-cov resolves the
-        # union via [tool.coverage.run].source, and a path-based
-        # source list (e.g. source = ["src"]) silently fails to
-        # match for non-editable installs - producing a 'No data was
-        # collected' warning and 0% reported coverage even though
-        # every test passes. See issue #138.
+        #   - 'true' when no '--cov' was found in pytest config. The
+        #     action then injects either '--cov=<pkg>' (when a
+        #     package name was derived from [project].name) or a
+        #     bare '--cov' as a last-resort fallback.
         #
-        # When neither signal is present, we attempt to derive the
-        # package import name from the project's pyproject.toml
-        # [project].name and pass '--cov=<pkg>' as a best-effort
-        # fallback. This preserves the v1.1.0 zero-config improvement
-        # for projects that haven't configured coverage at all,
-        # without breaking projects that have. If no [project].name
-        # is available we fall back to a bare '--cov' (which works
-        # for editable installs but typically collects zero data
-        # for non-editable installs - the discovery step warns about
-        # this in both the console output and $GITHUB_STEP_SUMMARY).
+        # Note that the presence of [tool.coverage.run].source does
+        # NOT suppress injection: pytest-cov still needs '--cov' on
+        # the CLI or in addopts to activate, even when source is
+        # configured. The source list configures WHAT to measure;
+        # '--cov' decides WHETHER to measure.
+        #
+        # Why prefer '--cov=<pkg>' over bare '--cov' in the
+        # fallback: coverage.py's default 'measure everything that
+        # is not stdlib' rule excludes site-packages, so for
+        # non-editable installs (the action default since v1.0.0)
+        # bare '--cov' produces zero data. '--cov=<pkg>' tells
+        # pytest-cov to track the named package wherever it lives,
+        # including site-packages.
         #
         # --cov-config is set to whatever the earlier discovery step
         # resolved: a real project-supplied config when available
@@ -1157,14 +1157,7 @@ runs:
             "--cov-report=xml:${coverage_dir}/coverage.xml"
             "--cov-config=${coverage_config}"
           )
-          if [ "${coverage_target_configured:-false}" != "true" ]; then
-            # Prefer '--cov=<pkg>' (derived from [project].name) over
-            # a bare '--cov'. Bare '--cov' relies on coverage.py's
-            # default 'measure everything that's not stdlib' rule,
-            # which excludes site-packages - so for non-editable
-            # installs it produces zero data. '--cov=<pkg>' tells
-            # pytest-cov to track the named package wherever it
-            # lives, including site-packages.
+          if [ "${coverage_inject_cov:-true}" = "true" ]; then
             if [ -n "${coverage_fallback_pkg:-}" ]; then
               coverage_flags=(\
                 "--cov=${coverage_fallback_pkg}" \

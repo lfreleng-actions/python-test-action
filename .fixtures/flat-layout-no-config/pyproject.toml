@@ -5,12 +5,22 @@
 #
 # Zero-configuration case. Flat layout (no src/ directory), no
 # coverage configuration at all, and no '--cov' anywhere in the
-# pytest config. Exercises the action's bare '--cov' fallback: when
-# neither the coverage config nor the pytest config selects a
-# collection target, the action injects a bare '--cov' on the
-# pytest command line so pytest-cov collects against everything
-# imported during the run. Without that fallback, the action would
-# silently pass --cov-report= flags that have nothing to write.
+# pytest config. Exercises the action's "no target configured"
+# fallback path:
+#
+#   - The action emits a missing-target warning to both the inline
+#     console output and $GITHUB_STEP_SUMMARY.
+#   - The action derives the package import name from
+#     [project].name (here 'mypkg') and injects '--cov=mypkg' so
+#     pytest-cov collects against the project package wherever it
+#     was installed.
+#
+# A bare '--cov' would NOT work here for a non-editable install:
+# coverage.py's default 'measure everything that's not stdlib' rule
+# excludes site-packages, so without a source list or an explicit
+# '--cov=<pkg>' it would collect zero data. The action only falls
+# back to bare '--cov' when [project].name cannot be extracted (a
+# requirements.txt-only project, for example).
 
 [build-system]
 requires = ["hatchling>=1.24"]
@@ -36,6 +46,7 @@ packages = ["mypkg"]
 testpaths = ["tests"]
 addopts = ["-v"]
 
-# Deliberately no [tool.coverage.run] section: the action must inject
-# a bare '--cov' as a best-effort fallback and emit a warning
-# recommending explicit configuration.
+# Deliberately no [tool.coverage.run] section: the action must
+# derive --cov=<pkg> from [project].name, emit a warning to console
+# and $GITHUB_STEP_SUMMARY, and inject the derived flag so
+# collection actually runs.

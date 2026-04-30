@@ -3,19 +3,23 @@
 
 # Fixture: src-layout-pkg-source
 #
-# The recommended shape: src/ layout with a package-name source list.
-# This works for both editable and non-editable installs because
-# coverage.py resolves the location via import. addopts deliberately
-# omits '--cov=' to exercise the action's "source set, no addopts
-# --cov" detection branch: the action must NOT inject a bare '--cov'
-# (the source list already configures the target) but pytest-cov
-# must still get one of the two signals to enable collection.
+# The recommended shape: src/ layout with a package-name source list
+# in [tool.coverage.run] and NO --cov in addopts. This exercises the
+# action's "source set, no addopts --cov" detection branch:
 #
-# Note: pytest-cov treats a non-empty [tool.coverage.run].source as
-# sufficient on its own only when '--cov' (bare or with arg) appears
-# somewhere on the command line OR in addopts. The action achieves
-# this by always passing '--cov-config' and '--cov-report=', which
-# activate pytest-cov; pytest-cov then honours the configured source.
+#   - Detection sees source_configured=true, cov_in_addopts=false.
+#   - The 'no target configured' warning is suppressed (source
+#     counts as configuration).
+#   - The action injects a bare '--cov' to activate pytest-cov;
+#     [tool.coverage.run].source = ["mypkg"] then scopes collection
+#     to the configured package. The action does NOT inject
+#     '--cov=mypkg' here - the source list already targets the
+#     package, so a bare '--cov' is sufficient and idiomatic.
+#
+# Package-name source ('mypkg' rather than 'src') is the recommended
+# shape because coverage.py resolves the location via import, so it
+# works for both editable and non-editable installs. A path-based
+# source ('src') only matches editable layouts.
 
 [build-system]
 requires = ["hatchling>=1.24"]
@@ -39,9 +43,12 @@ packages = ["src/mypkg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# A bare '--cov' here so pytest-cov is activated by the project
-# itself; the source list below selects what to collect against.
-addopts = ["-v", "--cov"]
+# Deliberately no '--cov' here: this fixture exercises the cell
+# where source is configured but addopts contains no coverage
+# directive. The action must inject a bare '--cov' itself for
+# pytest-cov to activate; [tool.coverage.run].source below scopes
+# collection to the configured package.
+addopts = ["-v"]
 
 [tool.coverage.run]
 # Package-name source. coverage.py resolves the location via import,

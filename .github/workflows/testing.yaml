@@ -124,15 +124,15 @@ jobs:
   ### Coverage configuration regression matrix ###
   #
   # Runs the action against a curated set of small fixtures under
-  # tests/fixtures/, each shaped to exercise one cell of the
+  # .fixtures/, each shaped to exercise one cell of the
   # (coverage source list × addopts --cov) matrix. Every fixture must
   # produce non-zero coverage; a regression that breaks the action's
-  # decision about when to inject a bare '--cov' (issue #138) will
-  # silently report 0% for at least one cell, which this job then
-  # surfaces as a hard failure.
+  # decision about when to inject '--cov' (issue #138) will silently
+  # report 0% for at least one cell, which this job then surfaces as
+  # a hard failure.
   #
   # The full rationale and fixture-by-fixture explanation lives in
-  # tests/fixtures/README.md.
+  # .fixtures/README.md.
   coverage-fixtures:
     name: "coverage-fixtures (${{ matrix.fixture }})"
     runs-on: ubuntu-24.04
@@ -149,13 +149,16 @@ jobs:
           # for both editable and non-editable installs because
           # coverage.py resolves the location via import.
           - src-layout-pkg-source
-          # Zero-configuration case. Exercises the action's bare
-          # '--cov' fallback for projects that have no coverage
-          # configuration at all.
+          # Zero-configuration case. The action derives the package
+          # import name from [project].name and injects '--cov=<pkg>'
+          # so collection works for non-editable installs (a bare
+          # '--cov' would not, since coverage.py's default rule
+          # excludes site-packages). Falls back to a bare '--cov'
+          # only when [project].name cannot be extracted.
           - flat-layout-no-config
           # Middle-ground case: '--cov=mypkg' in addopts only, no
           # source list. The detection regex must spot the addopts
-          # entry and skip the bare '--cov' injection.
+          # entry and skip the '--cov' injection.
           - addopts-cov-only
     permissions:
       contents: read
@@ -214,39 +217,51 @@ jobs:
             exit 1
           fi
 
-          line_rate="$(python3 - "$xml" <<'PY'
+          # Parse and validate the line-rate inside Python so the
+          # comparison is a real numeric check (float > 0). A shell
+          # 'case' on the raw string would only catch a fixed set of
+          # zero-spellings ('0', '0.0', '0.00', ...) and would let
+          # an unexpected formatting like '0.0000' or scientific
+          # notation slip through, defeating the purpose of the
+          # assertion. The fixtures are constructed so that 100% is
+          # achievable, but we only require strictly > 0 here so the
+          # assertion is not coupled to fixture details that may
+          # legitimately change.
+          python3 - "$xml" "$FIXTURE" <<'PY'
           import sys
           import xml.etree.ElementTree as ET
-          root = ET.parse(sys.argv[1]).getroot()
-          rate = root.get('line-rate')
-          if rate is None:
-              print('Error: line-rate attribute missing', file=sys.stderr)
-              sys.exit(2)
-          print(rate)
+
+          xml_path, fixture = sys.argv[1], sys.argv[2]
+          root = ET.parse(xml_path).getroot()
+          rate_str = root.get('line-rate')
+          if rate_str is None:
+              print(f'FAIL: line-rate attribute missing in {xml_path}',
+                    file=sys.stderr)
+              sys.exit(1)
+          try:
+              rate = float(rate_str)
+          except ValueError:
+              print(
+                  f'FAIL: line-rate {rate_str!r} not parseable as float',
+                  file=sys.stderr)
+              sys.exit(1)
+          print(f'Fixture: {fixture}')
+          print(f'Coverage XML: {xml_path}')
+          print(f'line-rate: {rate_str} (parsed: {rate})')
+          if rate <= 0:
+              print(
+                  f'FAIL: coverage line-rate is {rate} for {fixture} ❌',
+                  file=sys.stderr)
+              print(
+                  'This indicates the action did not configure '
+                  'pytest-cov correctly for this project shape.',
+                  file=sys.stderr)
+              print(
+                  'See .fixtures/README.md and issue #138.',
+                  file=sys.stderr)
+              sys.exit(1)
+          print(f'OK: {fixture} reported non-zero coverage ✅')
           PY
-          )"
-
-          echo "Fixture: ${FIXTURE}"
-          echo "Coverage XML: $xml"
-          echo "line-rate: $line_rate"
-
-          # line-rate is a string in [0, 1]. Zero (any of '0', '0.0',
-          # '0.00') indicates the regression we are guarding against.
-          # Any positive value passes; the fixtures are constructed
-          # so that 100% is achievable, but we deliberately do not
-          # require 1.0 here because that would couple the assertion
-          # to fixture details that may legitimately change.
-          case "$line_rate" in
-            0|0.0|0.00|0.000)
-              echo "FAIL: coverage line-rate is zero for ${FIXTURE} ❌"
-              echo "This indicates the action did not configure"
-              echo "pytest-cov correctly for this project shape."
-              echo "See .fixtures/README.md and issue #138."
-              exit 1
-              ;;
-          esac
-
-          echo "OK: ${FIXTURE} reported non-zero coverage ✅"
 
   ### Real-world regression matrix: python-nss-ng ###
   #

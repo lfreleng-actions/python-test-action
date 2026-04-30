@@ -38,36 +38,79 @@ designed to provide. The leading dot keeps the directory out of
 common file-discovery heuristics for any future packaging of the
 action repository.
 
-## The matrix
+## The decision matrix
 
-| Fixture | Layout | `addopts` | `[tool.coverage.run].source` | Why it matters |
-|--- |--- |--- |--- |--- |
-| [`src-layout-path-source`](./src-layout-path-source/) | src/ | `--cov=mypkg` | `["src"]` | The exact regression case from issue #138. Path-based source + addopts `--cov` + non-editable install used to silently collect 0%. |
-| [`src-layout-pkg-source`](./src-layout-pkg-source/) | src/ | `--cov` (bare) | `["mypkg"]` | The recommended shape. Package-name source resolves via import and works for any install layout. |
-| [`flat-layout-no-config`](./flat-layout-no-config/) | flat | (none) | (none) | The zero-configuration case. The action must derive the package name from `[project].name` and pass `--cov=<pkg>` as a fallback - a bare `--cov` collects nothing for non-editable installs. |
-| [`addopts-cov-only`](./addopts-cov-only/) | src/ | `--cov=mypkg` | (none) | The middle ground: project specifies a package via addopts but does not configure a source list. The action must NOT inject a bare `--cov` (which would override the addopts target). |
+The detection logic in `action.yaml` answers two independent
+questions about every consumer project:
 
-## Why these shapes specifically
+- **`cov_in_addopts`** - does any pytest config file
+  (`pyproject.toml` `addopts`, `pytest.ini`, `setup.cfg`, `tox.ini`)
+  contain `--cov` (bare or with `=<pkg>`)?
+- **`coverage_source_configured`** - does the discovered coverage
+  config set a non-empty `[tool.coverage.run].source` /
+  `[coverage:run] source` / `[run] source`?
 
-The detection logic in `action.yaml` decides whether to inject a
-`--cov` argument based on two signals: the presence of a non-empty
-`[tool.coverage.run].source` and the presence of `--cov=` in any
-pytest config file. These four fixtures cover every combination of
-those two signals being on or off:
+Each signal drives a different decision:
 
-| Fixture | source set | --cov in addopts | inject --cov? |
-|--- |:-: |:-: |:-: |
-| `src-layout-path-source` | YES | YES | NO |
-| `src-layout-pkg-source` | YES | NO | NO |
-| `flat-layout-no-config` | NO | NO | YES (`--cov=<pkg>`) |
-| `addopts-cov-only` | NO | YES | NO |
+| Signal                       | Decision it drives                                                  |
+|---                           |---                                                                  |
+| `cov_in_addopts`             | Whether the action injects `--cov` itself                           |
+| `coverage_source_configured` | Whether the action emits the "no coverage target configured" warning AND whether the action derives a fallback package name |
 
-A regression that causes the action to inject `--cov` when it should
-not (the issue #138 case) will produce 0% coverage in
-`src-layout-path-source` and break the CI assertion. A regression
-that causes the action to skip the fallback when it should inject
-(e.g. breaking the detection regex or losing the package-name
-derivation) will produce 0% coverage in `flat-layout-no-config`.
+When `cov_in_addopts=false` (the action will inject `--cov`), the
+form of the injection depends on `coverage_source_configured`:
+
+- **`source_configured=true`**: inject a bare `--cov`. The
+  configured source list scopes collection; the bare `--cov` only
+  needs to activate pytest-cov.
+- **`source_configured=false`**: derive the package name from
+  `[project].name` and inject `--cov=<pkg>`. Without an explicit
+  target, pytest-cov needs to know which package to track, since
+  coverage.py's default rule excludes site-packages.
+
+## The fixtures
+
+| Fixture                                                  | Layout | `addopts` | `[tool.coverage.run].source` | Action's `--cov` decision |
+|---                                                       |---     |---        |---                           |---                        |
+| [`src-layout-path-source`](./src-layout-path-source/)    | src/   | `--cov=mypkg` | `["src"]`                | NO injection (addopts wins)         |
+| [`src-layout-pkg-source`](./src-layout-pkg-source/)      | src/   | (none)        | `["mypkg"]`              | inject bare `--cov` (source scopes) |
+| [`flat-layout-no-config`](./flat-layout-no-config/)      | flat   | (none)        | (none)                   | inject `--cov=mypkg` (derived)      |
+| [`addopts-cov-only`](./addopts-cov-only/)                | src/   | `--cov=mypkg` | (none)                   | NO injection (addopts wins)         |
+
+### Why each fixture matters
+
+- **`src-layout-path-source`** is the exact regression case from
+  issue #138. Path-based source + addopts `--cov` + non-editable
+  install used to silently collect 0% because the action injected
+  an unconditional bare `--cov` on top of the addopts entry. With
+  the fix, `cov_in_addopts=true` suppresses injection, so addopts
+  wins and pytest-cov collects against `mypkg` from `site-packages`.
+
+- **`src-layout-pkg-source`** is the recommended shape:
+  package-name source, no `--cov` in addopts. The action sees
+  source configured (so no warning) but no `--cov` in addopts (so
+  it must inject one). It injects a bare `--cov` to activate
+  pytest-cov; `[tool.coverage.run].source = ["mypkg"]` then scopes
+  collection. This is the cell that broke before fix round 2: with
+  the original "either signal suppresses injection" logic,
+  source-set was enough to suppress `--cov` and pytest-cov silently
+  did nothing.
+
+- **`flat-layout-no-config`** is the zero-configuration case: no
+  source list, no `--cov` anywhere. The action emits a warning to
+  both console and `$GITHUB_STEP_SUMMARY` recommending explicit
+  configuration, then derives the package name from
+  `[project].name` and injects `--cov=mypkg` so collection runs. A
+  bare `--cov` here would collect zero data for non-editable
+  installs (coverage.py's default rule excludes `site-packages`),
+  so the explicit `--cov=<pkg>` is required.
+
+- **`addopts-cov-only`** is the middle case: `--cov=mypkg` in
+  addopts, no source list. The detection regex must spot
+  `--cov=mypkg` and skip injection (otherwise the same regression
+  as `src-layout-path-source` reappears via a different signal).
+  The regex deliberately excludes `--cov-report` / `--cov-config` /
+  `--cov-fail-under` to avoid false positives.
 
 ## Running fixtures locally
 
