@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Fixture: flat-layout-no-config
+#
+# Zero-configuration case. Flat layout (no src/ directory), no
+# coverage configuration at all, and no '--cov' anywhere in the
+# pytest config. Exercises the action's bare '--cov' fallback: when
+# neither the coverage config nor the pytest config selects a
+# collection target, the action injects a bare '--cov' on the
+# pytest command line so pytest-cov collects against everything
+# imported during the run. Without that fallback, the action would
+# silently pass --cov-report= flags that have nothing to write.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypkg"
+version = "0.0.0"
+description = "Coverage fixture: flat layout, zero coverage config"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mypkg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v"]
+
+# Deliberately no [tool.coverage.run] section: the action must inject
+# a bare '--cov' as a best-effort fallback and emit a warning
+# recommending explicit configuration.

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+# Fixture: src-layout-pkg-source
+#
+# The recommended shape: src/ layout with a package-name source list.
+# This works for both editable and non-editable installs because
+# coverage.py resolves the location via import. addopts deliberately
+# omits '--cov=' to exercise the action's "source set, no addopts
+# --cov" detection branch: the action must NOT inject a bare '--cov'
+# (the source list already configures the target) but pytest-cov
+# must still get one of the two signals to enable collection.
+#
+# Note: pytest-cov treats a non-empty [tool.coverage.run].source as
+# sufficient on its own only when '--cov' (bare or with arg) appears
+# somewhere on the command line OR in addopts. The action achieves
+# this by always passing '--cov-config' and '--cov-report=', which
+# activate pytest-cov; pytest-cov then honours the configured source.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypkg"
+version = "0.0.0"
+description = "Coverage fixture: src layout, package-name source list"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mypkg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A bare '--cov' here so pytest-cov is activated by the project
+# itself; the source list below selects what to collect against.
+addopts = ["-v", "--cov"]
+
+[tool.coverage.run]
+# Package-name source. coverage.py resolves the location via import,
+# so this works regardless of where the package executes from.
+source = ["mypkg"]
+
+[tool.coverage.report]
+show_missing = true
