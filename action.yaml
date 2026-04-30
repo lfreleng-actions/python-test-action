@@ -409,8 +409,9 @@ runs:
         #
         # coverage.py natively reads configuration from a tiered set of
         # files (in this order): the file passed via --rcfile/--cov-config,
-        # then setup.cfg ([coverage:run]), tox.ini ([coverage:run]),
-        # pyproject.toml ([tool.coverage.run]), and finally .coveragerc.
+        # then .coveragerc, then setup.cfg ([coverage:run]),
+        # tox.ini ([coverage:run]), and finally
+        # pyproject.toml ([tool.coverage.run]).
         #
         # Its built-in discovery is anchored at the current working
         # directory. This action runs pytest from $GITHUB_WORKSPACE while
@@ -442,10 +443,14 @@ runs:
         # Helper: does $1 contain a coverage section header? Recognises
         # both the .ini-style ([coverage:run], [coverage:report] etc.)
         # and TOML-style ([tool.coverage.*]) headers.
+        # POSIX character classes are used because '\s' is not a
+        # portable whitespace escape in 'grep -E' (BSD/GNU grep treat
+        # it as a literal 's'); '[[:space:]]' works in both.
         contains_coverage_section() {
           local file="$1"
           [ -f "$file" ] || return 1
-          grep -qE '^\s*\[(coverage:[a-z]+|tool\.coverage\.[a-z]+)\]' \
+          grep -qE \
+            '^[[:space:]]*\[(coverage:[a-z]+|tool\.coverage\.[a-z]+)\]' \
             "$file"
         }
 
@@ -453,39 +458,45 @@ runs:
         contains_data_file() {
           local file="$1"
           [ -f "$file" ] || return 1
-          grep -qE '^\s*data_file\s*=' "$file"
+          grep -qE '^[[:space:]]*data_file[[:space:]]*=' "$file"
         }
 
         # Walk coverage.py's discovery order, anchored at $prefix.
-        # setup.cfg, tox.ini and pyproject.toml are multi-purpose files
-        # so we require an explicit [coverage:*] / [tool.coverage.*]
-        # section before adopting them. .coveragerc is by convention
-        # ALWAYS a coverage configuration file - its standard sections
-        # are the bare [run] / [report] / [paths] / [html] / [xml] /
-        # [json] forms which our 'contains_coverage_section' header
-        # check would not match; treat the file's mere existence as
-        # sufficient evidence that the project intends it as coverage
-        # config.
-        for candidate in \
-          "$prefix/setup.cfg" \
-          "$prefix/tox.ini" \
-          "$prefix/pyproject.toml"; do
-          if contains_coverage_section "$candidate"; then
-            coverage_config="$candidate"
-            if contains_data_file "$candidate"; then
-              coverage_data_file_set="true"
-            fi
-            echo "Using coverage configuration from: $candidate ✅"
-            break
-          fi
-        done
-
-        if [ -z "$coverage_config" ] && [ -f "$prefix/.coveragerc" ]; then
+        # coverage.py prefers .coveragerc over the multi-purpose files
+        # (setup.cfg, tox.ini, pyproject.toml) when several are
+        # present, so a project that intentionally ships .coveragerc
+        # gets the same config it would get running coverage locally.
+        #
+        # .coveragerc is by convention ALWAYS a coverage configuration
+        # file - its standard sections are the bare [run] / [report]
+        # / [paths] / [html] / [xml] / [json] forms which our
+        # 'contains_coverage_section' header check would not match;
+        # treat the file's mere existence as sufficient evidence that
+        # the project intends it as coverage config.
+        #
+        # setup.cfg, tox.ini and pyproject.toml are multi-purpose
+        # files so we require an explicit [coverage:*] /
+        # [tool.coverage.*] section before adopting them.
+        if [ -f "$prefix/.coveragerc" ]; then
           coverage_config="$prefix/.coveragerc"
           if contains_data_file "$coverage_config"; then
             coverage_data_file_set="true"
           fi
           echo "Using coverage configuration from: $coverage_config ✅"
+        else
+          for candidate in \
+            "$prefix/setup.cfg" \
+            "$prefix/tox.ini" \
+            "$prefix/pyproject.toml"; do
+            if contains_coverage_section "$candidate"; then
+              coverage_config="$candidate"
+              if contains_data_file "$candidate"; then
+                coverage_data_file_set="true"
+              fi
+              echo "Using coverage configuration from: $candidate ✅"
+              break
+            fi
+          done
         fi
 
         if [ -z "$coverage_config" ]; then
@@ -700,9 +711,11 @@ runs:
         # "3.8"' check would miss values like '3.8.18' and route them
         # to the latest-tox branch - which fails because tox>=4 has
         # dropped Python 3.8 support. Extract the major.minor pair
-        # via parameter expansion and compare against that.
+        # using bash's built-in IFS-based read (no subshell, no awk
+        # fork) and compare against that.
         py_ver="$INPUT_PYTHON_VERSION"
-        py_ver_xy="$(echo "$py_ver" | awk -F. '{print $1"."$2}')"
+        IFS=. read -r py_major py_minor _ <<<"$py_ver"
+        py_ver_xy="${py_major}.${py_minor}"
         if [[ "$py_ver_xy" == "3.8" ]]; then
           echo 'Using tox<4.0.0 for Python 3.8 compatibility 💬'
           tox_cmd=(uvx --python "$py_ver" --from 'tox<4.0.0' tox)
