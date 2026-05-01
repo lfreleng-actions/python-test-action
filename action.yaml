@@ -638,6 +638,8 @@ runs:
         # subprojects do not collide on the same cache key.
         cache-dependency-glob: |
           ${{ inputs.path_prefix }}/pyproject.toml
+          ${{ inputs.path_prefix }}/setup.py
+          ${{ inputs.path_prefix }}/setup.cfg
           ${{ inputs.path_prefix }}/requirements*.txt
           ${{ inputs.path_prefix }}/uv.lock
           ${{ inputs.path_prefix }}/tox.ini
@@ -841,6 +843,28 @@ runs:
         # (editable or not) before the test runners so that the latest
         # local code is what test imports resolve against.
         #
+        # Precedence (first match wins):
+        #   1. pyproject.toml         -> install ./<prefix>[test,dev]
+        #      (with graceful fallback to [test], then bare).
+        #   2. setup.py / setup.cfg   -> install ./<prefix>, and ALSO
+        #      install requirements.txt if present alongside. The
+        #      canonical pbr layout ships both: setup.py invokes pbr
+        #      and requirements.txt holds the deps. Layering
+        #      requirements.txt on top is a no-op for projects that
+        #      already pull it in via install_requires, and rescues
+        #      hand-rolled setup.py projects that do not.
+        #   3. requirements.txt only  -> pure-deps project, no
+        #      installable package; tests cannot import a project
+        #      module.
+        #   4. none of the above      -> warn and skip install.
+        #
+        # The legacy ordering placed requirements.txt above
+        # setup.py / setup.cfg, which made the legacy branch
+        # unreachable for any project shipping both files (e.g. pbr).
+        # That installed dependencies but never the project itself,
+        # causing pytest to fail with ModuleNotFoundError on import
+        # of the project package.
+        #
         # We deliberately do NOT pass '--system' here. setup-uv has
         # already provisioned and activated a venv at .venv (PATH is
         # prepended, VIRTUAL_ENV is exported), so an unqualified
@@ -877,10 +901,6 @@ runs:
             uv pip install ${UV_EDITABLE_FLAG} \
               "./${path_prefix_input}"
           fi
-        elif [ -f "$path_prefix_input/requirements.txt" ]; then
-          echo "Source: $path_prefix_input/requirements.txt ⬇️"
-          uv pip install \
-            -r "$path_prefix_input/requirements.txt"
         elif [ -f "$path_prefix_input/setup.py" ] || \
              [ -f "$path_prefix_input/setup.cfg" ]; then
           # Legacy setuptools-style projects without pyproject.toml.
@@ -888,6 +908,13 @@ runs:
           # any 'tests/conftest.py' that imports from the package work
           # at test time. uv accepts the same './<prefix>' form here
           # as for pyproject-based projects.
+          #
+          # If a requirements.txt is present alongside, layer it on
+          # top after the local install. For pbr projects this is a
+          # no-op (deps already pulled in via install_requires); for
+          # hand-rolled setup.py projects that ship a requirements.txt
+          # but do not reference it from setup.py this ensures their
+          # extra runtime deps are available at test time.
           if [ -f "$path_prefix_input/setup.py" ]; then
             echo "Source: $path_prefix_input/setup.py ⬇️"
           else
@@ -895,9 +922,23 @@ runs:
           fi
           uv pip install ${UV_EDITABLE_FLAG} \
             "./${path_prefix_input}"
+          if [ -f "$path_prefix_input/requirements.txt" ]; then
+            echo "Also installing:" \
+              "$path_prefix_input/requirements.txt ⬇️"
+            uv pip install \
+              -r "$path_prefix_input/requirements.txt"
+          fi
+        elif [ -f "$path_prefix_input/requirements.txt" ]; then
+          # Pure-deps project (no installable package). Tests run
+          # against whatever is in requirements.txt only; imports of
+          # a project module will fail. This is the documented
+          # behaviour for this branch.
+          echo "Source: $path_prefix_input/requirements.txt ⬇️"
+          uv pip install \
+            -r "$path_prefix_input/requirements.txt"
         else
-          echo 'Warning: no pyproject.toml, requirements.txt,' \
-            'setup.py or setup.cfg found under' \
+          echo 'Warning: no pyproject.toml, setup.py, setup.cfg or' \
+            'requirements.txt found under' \
             "'$path_prefix_input' ⚠️"
           echo 'Skipping project install; tests will run against' \
             'pytest tooling only - imports of the project package' \
