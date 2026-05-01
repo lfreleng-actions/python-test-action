@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Fixture: addopts-cov-only
+#
+# Middle-ground case: the project specifies a coverage target via
+# pytest addopts but does NOT configure [tool.coverage.run].source.
+# pytest-cov accepts '--cov=mypkg' from addopts and collects against
+# the imported 'mypkg' module wherever it lives.
+#
+# Exercises the action's "addopts --cov detected" branch: the
+# detection regex must spot '--cov=mypkg' in addopts and skip the
+# bare '--cov' injection. If the action injected a bare '--cov' on
+# top of the addopts entry, pytest-cov would fall back to the
+# (empty) source list in [tool.coverage.run] and collect nothing -
+# the same regression as src-layout-path-source but reached via a
+# different signal.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypkg"
+version = "0.0.0"
+description = "Coverage fixture: addopts --cov, no source list"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mypkg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--cov=mypkg"]
+
+# Deliberately no [tool.coverage.run] section: the only signal is
+# the '--cov=mypkg' in addopts above.

@@ -121,6 +121,148 @@ jobs:
           echo "Error: previous step should have failed ❌"
           exit 1
 
+  ### Coverage configuration regression matrix ###
+  #
+  # Runs the action against a curated set of small fixtures under
+  # .fixtures/, each shaped to exercise one cell of the
+  # (coverage source list × addopts --cov) matrix. Every fixture must
+  # produce non-zero coverage; a regression that breaks the action's
+  # decision about when to inject '--cov' (issue #138) will silently
+  # report 0% for at least one cell, which this job then surfaces as
+  # a hard failure.
+  #
+  # The full rationale and fixture-by-fixture explanation lives in
+  # .fixtures/README.md.
+  coverage-fixtures:
+    name: "coverage-fixtures (${{ matrix.fixture }})"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture:
+          # The exact regression case from issue #138: src/ layout +
+          # addopts '--cov=mypkg' + path-based source list. Under the
+          # broken v1.1.0 behaviour this reported 0% coverage despite
+          # all tests passing.
+          - src-layout-path-source
+          # The recommended shape: package-name source list. Works
+          # for both editable and non-editable installs because
+          # coverage.py resolves the location via import.
+          - src-layout-pkg-source
+          # Zero-configuration case. The action derives the package
+          # import name from [project].name and injects '--cov=<pkg>'
+          # so collection works for non-editable installs (a bare
+          # '--cov' would not, since coverage.py's default rule
+          # excludes site-packages). Falls back to a bare '--cov'
+          # only when [project].name cannot be extracted.
+          - flat-layout-no-config
+          # Middle-ground case: '--cov=mypkg' in addopts only, no
+          # source list. The detection regex must spot the addopts
+          # entry and skip the '--cov' injection.
+          - addopts-cov-only
+    permissions:
+      contents: read
+    timeout-minutes: 8
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Run the action under test against the current fixture.
+      # 'editable' is left at its default (false) so the package
+      # executes from site-packages/ rather than from src/ - this
+      # is the install layout that originally exposed issue #138.
+      - name: "Run action against fixture: ${{ matrix.fixture }}"
+        uses: ./
+        with:
+          python_version: ${{ env.python_version }}
+          path_prefix: ".fixtures/${{ matrix.fixture }}"
+          tests_path: "tests"
+          # yamllint disable-line rule:line-length
+          artefact_name: "coverage-fixtures-${{ matrix.fixture }}-coverage"
+          report_artefact: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Assert the produced coverage.xml reports non-zero coverage.
+      # Tests passing on its own is not sufficient evidence that the
+      # action wired pytest-cov correctly: the issue #138 regression
+      # produced 'all tests passed, 0% coverage' which would slip
+      # past a tests-only assertion. Reading the XML directly avoids
+      # any dependency on the action's own log output format.
+      - name: "Assert non-zero coverage from fixture"
+        shell: bash
+        env:
+          PYTHON_VERSION: ${{ env.python_version }}
+          FIXTURE: ${{ matrix.fixture }}
+        run: |
+          # Assert non-zero coverage from fixture
+          set -euo pipefail
+
+          # The action stores the XML at /tmp/coverage-py<XY>/coverage.xml
+          # where <XY> is the python_version with dots stripped. Build
+          # the same path here rather than depending on action outputs
+          # so the assertion is decoupled from action implementation
+          # details.
+          py_xy="$(echo "${PYTHON_VERSION}" | tr -d '.')"
+          xml="/tmp/coverage-py${py_xy}/coverage.xml"
+
+          if [ ! -f "$xml" ]; then
+            echo "Error: coverage XML not found at $xml ❌"
+            ls -la /tmp/coverage-* 2>/dev/null || true
+            exit 1
+          fi
+
+          # Parse and validate the line-rate inside Python so the
+          # comparison is a real numeric check (float > 0). A shell
+          # 'case' on the raw string would only catch a fixed set of
+          # zero-spellings ('0', '0.0', '0.00', ...) and would let
+          # an unexpected formatting like '0.0000' or scientific
+          # notation slip through, defeating the purpose of the
+          # assertion. The fixtures are constructed so that 100% is
+          # achievable, but we only require strictly > 0 here so the
+          # assertion is not coupled to fixture details that may
+          # legitimately change.
+          python3 - "$xml" "$FIXTURE" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          xml_path, fixture = sys.argv[1], sys.argv[2]
+          root = ET.parse(xml_path).getroot()
+          rate_str = root.get('line-rate')
+          if rate_str is None:
+              print(f'FAIL: line-rate attribute missing in {xml_path}',
+                    file=sys.stderr)
+              sys.exit(1)
+          try:
+              rate = float(rate_str)
+          except ValueError:
+              print(
+                  f'FAIL: line-rate {rate_str!r} not parseable as float',
+                  file=sys.stderr)
+              sys.exit(1)
+          print(f'Fixture: {fixture}')
+          print(f'Coverage XML: {xml_path}')
+          print(f'line-rate: {rate_str} (parsed: {rate})')
+          if rate <= 0:
+              print(
+                  f'FAIL: coverage line-rate is {rate} for {fixture} ❌',
+                  file=sys.stderr)
+              print(
+                  'This indicates the action did not configure '
+                  'pytest-cov correctly for this project shape.',
+                  file=sys.stderr)
+              print(
+                  'See .fixtures/README.md and issue #138.',
+                  file=sys.stderr)
+              sys.exit(1)
+          print(f'OK: {fixture} reported non-zero coverage ✅')
+          PY
+
   ### Real-world regression matrix: python-nss-ng ###
   #
   # Runs the action against the full python-nss-ng repository across

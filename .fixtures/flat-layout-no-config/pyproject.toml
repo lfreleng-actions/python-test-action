@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Fixture: flat-layout-no-config
+#
+# Zero-configuration case. Flat layout (no src/ directory), no
+# coverage configuration at all, and no '--cov' anywhere in the
+# pytest config. Exercises the action's "no target configured"
+# fallback path:
+#
+#   - The action emits a missing-target warning to both the inline
+#     console output and $GITHUB_STEP_SUMMARY.
+#   - The action derives the package import name from
+#     [project].name (here 'mypkg') and injects '--cov=mypkg' so
+#     pytest-cov collects against the project package wherever it
+#     was installed.
+#
+# A bare '--cov' would NOT work here for a non-editable install:
+# coverage.py's default 'measure everything that's not stdlib' rule
+# excludes site-packages, so without a source list or an explicit
+# '--cov=<pkg>' it would collect zero data. The action only falls
+# back to bare '--cov' when [project].name cannot be extracted (a
+# requirements.txt-only project, for example).
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypkg"
+version = "0.0.0"
+description = "Coverage fixture: flat layout, zero coverage config"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mypkg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v"]
+
+# Deliberately no [tool.coverage.run] section: the action must
+# derive --cov=<pkg> from [project].name, emit a warning to console
+# and $GITHUB_STEP_SUMMARY, and inject the derived flag so
+# collection actually runs.

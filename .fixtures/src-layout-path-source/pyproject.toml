@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Fixture: src-layout-path-source
+#
+# Reproduces the exact regression from issue #138:
+#   - src/ layout
+#   - addopts pulls in '--cov=mypkg'
+#   - [tool.coverage.run].source is path-based (["src"])
+#
+# Under the action's v1.1.0 default of non-editable installs and an
+# unconditional bare '--cov' on the pytest CLI, this combination
+# silently collected 0% coverage. The action must detect the existing
+# '--cov=mypkg' in addopts and the existing source list, and skip the
+# bare '--cov' injection so addopts wins.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypkg"
+version = "0.0.0"
+description = "Coverage fixture: src layout, path-based source list"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mypkg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--cov=mypkg"]
+
+[tool.coverage.run]
+# Path-based source list. This is the shape that breaks under the
+# v1.1.0 unconditional bare '--cov' injection when combined with a
+# non-editable install: 'src' does not match
+# '.venv/.../site-packages/mypkg' so coverage collects nothing.
+source = ["src"]
+
+[tool.coverage.report]
+show_missing = true
