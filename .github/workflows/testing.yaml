@@ -263,6 +263,249 @@ jobs:
           print(f'OK: {fixture} reported non-zero coverage ✅')
           PY
 
+  ### detect_coverage.py unit test suite ###
+  #
+  # The detection logic that decides whether to inject '--cov', what
+  # fallback package name to derive, and (since issue #138 follow-up)
+  # whether the consumer's omit list excludes the install location
+  # lives in 'scripts/detect_coverage.py'. The 'coverage-fixtures'
+  # job above exercises each shape end-to-end by running the entire
+  # action, but that path is expensive (per-fixture venv, real pytest,
+  # XML parse) and slow to iterate on. The unit-test job below runs
+  # the same script against the same fixtures plus a handful of
+  # synthetic edge cases in well under a second, catching detection
+  # regressions long before they could ship through the matrix job.
+  detect-coverage-unit-tests:
+    name: "detect_coverage.py unit tests"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Use the same uv-managed interpreter the action itself uses
+      # in production. Pinning to env.python_version keeps the unit
+      # tests on the same Python the rest of this workflow runs
+      # against; the script must work under 3.10-3.14 (and the
+      # tomllib/tomli fallback for the latter) but a single version
+      # is enough to catch logic regressions here - the matrix job
+      # is what guarantees runtime coverage across the version grid.
+      #
+      # 'activate-environment: true' tells setup-uv to create a
+      # venv at .venv/ under the workspace and prepend its bin/
+      # to PATH (also exporting VIRTUAL_ENV). We need that here
+      # because Ubuntu 24.04's system Python is PEP-668
+      # externally-managed, so 'uv pip install --system' refuses
+      # to install pytest. With the venv active, an unqualified
+      # 'uv pip install' targets the venv's interpreter and 'python
+      # -m pytest' resolves to the same one.
+      - name: "Set up uv"
+        # yamllint disable-line rule:line-length
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v7.2.0
+        with:
+          python-version: ${{ env.python_version }}
+          activate-environment: true
+          enable-cache: true
+
+      - name: "Install pytest"
+        shell: bash
+        run: |
+          # Install pytest into the uv-activated venv so 'python
+          # -m pytest' below resolves to the same interpreter.
+          uv pip install pytest
+
+      - name: "Run detect_coverage.py unit tests"
+        shell: bash
+        run: |
+          # The tests live under tests/ at the repo root; the test
+          # module prepends scripts/ to sys.path so it can import
+          # detect_coverage directly. Run via 'python -m pytest' to
+          # keep import resolution consistent with how the action
+          # itself invokes the script.
+          python -m pytest tests/test_detect_coverage.py -v
+
+  ### Coverage 'omit excludes install' warning fixture ###
+  #
+  # The 'omit-excludes-install' fixture is structurally different
+  # from the four cells in the coverage-fixtures matrix: it ships a
+  # config that the action cannot rescue (the broken omit list masks
+  # all measurement no matter what flags are passed), so the
+  # invariant being checked is the WARNING, not the coverage value.
+  #
+  # The action emits the warning to console AND to
+  # $GITHUB_STEP_SUMMARY, but $GITHUB_STEP_SUMMARY is a per-step
+  # file (each step gets a fresh path; the runner concatenates them
+  # at job-end into the published summary), so a follow-up
+  # assertion step cannot read what an earlier step wrote there.
+  # We therefore verify the warning channel via two surfaces that
+  # DO survive across steps:
+  #
+  #   1. The KEY=VALUE pairs the action wrote to $GITHUB_ENV in
+  #      the 'Detect coverage configuration' step
+  #      ('coverage_omit_excludes_install',
+  #      'coverage_problematic_omit_patterns'). If those are set
+  #      correctly it proves the bash template reached the warning
+  #      branch without crashing on a quoting accident.
+  #   2. The generated coverage.xml's 'line-rate' attribute, which
+  #      must be exactly 0.0 for this fixture's pyproject.toml (it
+  #      reproduces the bug). A future change that silently 'fixed'
+  #      omit handling would also be caught here.
+  #
+  # The exact rendered markdown that goes into the step summary is
+  # covered by the detect_coverage.py unit tests above (which check
+  # the KEY=VALUE contract verbatim) and by manual inspection of
+  # the per-job summary published in the GitHub UI.
+  #
+  # We intentionally leave coverage's '--cov-fail-under' unset in the
+  # fixture's pyproject.toml so that 0% coverage does NOT fail the
+  # action's pytest step - otherwise we'd be testing the failure
+  # mode rather than the warning channel.
+  coverage-omit-warning:
+    name: "coverage-omit-warning fixture"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 8
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Run the action against the omit fixture. editable left at
+      # its default 'false' - that is the install layout that
+      # triggers the regression in real consumers, and the warning
+      # only fires for non-editable installs.
+      - name: "Run action against fixture: omit-excludes-install"
+        uses: ./
+        with:
+          python_version: ${{ env.python_version }}
+          path_prefix: ".fixtures/omit-excludes-install"
+          tests_path: "tests"
+          # yamllint disable-line rule:line-length
+          artefact_name: "coverage-omit-warning-coverage"
+          report_artefact: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Assert the detection step set the omit signals correctly.
+      # These env vars survive across steps because the action
+      # writes them via $GITHUB_ENV. Reaching the assertion below
+      # with the booleans flipped (or the patterns string empty)
+      # would mean either detect_coverage.py regressed or the
+      # action's bash failed to forward them - either is a hard
+      # fail.
+      - name: "Assert omit detection signals propagated to env"
+        shell: bash
+        run: |
+          # Verify env vars from the action's detection step
+          set -euo pipefail
+
+          echo "coverage_omit_excludes_install=" \
+            "${coverage_omit_excludes_install:-<unset>}"
+          echo "coverage_problematic_omit_patterns=" \
+            "${coverage_problematic_omit_patterns:-<unset>}"
+
+          if [ "${coverage_omit_excludes_install:-false}" != "true" ]; then
+            echo "Error: coverage_omit_excludes_install was not 'true' ❌" >&2
+            echo "The action's detect_coverage.py step did not flag" >&2
+            echo "the fixture's '*/.venv/*' omit entry." >&2
+            exit 1
+          fi
+
+          # The fixture sets exactly one offending pattern; assert
+          # both that the variable is non-empty and that the
+          # specific pattern is present. ';' is the documented
+          # separator (see scripts/detect_coverage.py main()).
+          if [ -z "${coverage_problematic_omit_patterns:-}" ]; then
+            echo "Error: coverage_problematic_omit_patterns is empty ❌" >&2
+            exit 1
+          fi
+          case ";${coverage_problematic_omit_patterns};" in
+            *";*/.venv/*;"*)
+              ;;
+            *)
+              echo "Error: '*/.venv/*' missing from patterns ❌" >&2
+              echo "Got: ${coverage_problematic_omit_patterns}" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "OK: omit signals propagated correctly ✅"
+
+      # Reproducing the bug is the whole point of this fixture, so
+      # assert that the action did NOT manage to collect coverage.
+      # If a future change to the action somehow caused omit
+      # patterns to be ignored (or to be applied differently),
+      # this assertion would surface that before the warning
+      # channel stopped being relevant.
+      #
+      # When pytest-cov collects no data (which is exactly what
+      # the broken omit list causes), it skips XML emission
+      # entirely - the file simply does not exist. coverage.py
+      # 7.x prints 'No data was collected.' and pytest-cov
+      # follows up with 'Failed to generate report: No data to
+      # report.', then writes nothing. So 'no XML at all' is the
+      # primary symptom of the bug. We also accept the secondary
+      # case where some pytest-cov / coverage.py future combination
+      # might write an XML with line-rate=0 instead of skipping it,
+      # so the assertion stays robust if that behaviour changes.
+      - name: "Assert fixture reproduces the 0% coverage failure"
+        shell: bash
+        env:
+          PYTHON_VERSION: ${{ env.python_version }}
+        run: |
+          # Confirm coverage was not collected - the bug is reproduced
+          set -euo pipefail
+
+          py_xy="$(echo "${PYTHON_VERSION}" | tr -d '.')"
+          xml="/tmp/coverage-py${py_xy}/coverage.xml"
+
+          if [ ! -f "$xml" ]; then
+            echo "OK: bug reproduced - no coverage XML written ✅"
+            echo "(pytest-cov collected no data; the omit glob" \
+              "masked everything, so nothing to report)."
+            exit 0
+          fi
+
+          # XML exists - belt-and-braces check that line-rate is
+          # zero. Any value > 0 means coverage actually got
+          # measured, which would mean the omit list is no longer
+          # excluding the install location and the fixture has
+          # stopped exercising the regression.
+          python3 - "$xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          xml_path = sys.argv[1]
+          root = ET.parse(xml_path).getroot()
+          rate = float(root.get('line-rate') or '0')
+          print(f'line-rate: {rate}')
+          if rate != 0.0:
+              print(
+                  f'FAIL: expected zero coverage to reproduce the '
+                  f'omit-excludes-install bug, got {rate} ❌',
+                  file=sys.stderr)
+              print(
+                  'The omit pattern no longer excludes the install '
+                  'location; either coverage.py changed pattern '
+                  'matching, or the fixture needs updating.',
+                  file=sys.stderr)
+              sys.exit(1)
+          print('OK: bug reproduced (XML exists with line-rate=0) ✅')
+          PY
+
   ### Real-world regression matrix: python-nss-ng ###
   #
   # Runs the action against the full python-nss-ng repository across

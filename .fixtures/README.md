@@ -22,6 +22,17 @@ Both assertions are needed because the regression tracked in
 [issue #138][issue138] manifested as "tests pass, but coverage is 0%" -
 silent and easy to miss without a coverage-value check.
 
+A companion job, [`coverage-omit-warning`][ci], exercises the
+[`omit-excludes-install`](./omit-excludes-install/) fixture
+separately: the misconfiguration it ships cannot be rescued by the
+action (the omit list excludes the install location no matter what
+flags pytest gets), so the invariant being checked is that the
+action surfaces a clear warning to `$GITHUB_STEP_SUMMARY` rather
+than that coverage is non-zero. The unit-test job
+[`detect-coverage-unit-tests`][ci] runs the script directly
+against all fixtures plus a set of synthetic edge cases for fast
+feedback on detection-logic changes.
+
 [ci]: ../.github/workflows/testing.yaml
 [issue138]: https://github.com/lfreleng-actions/python-test-action/issues/138
 
@@ -40,8 +51,8 @@ action repository.
 
 ## The decision matrix
 
-The detection logic in `action.yaml` answers two independent
-questions about every consumer project:
+The detection logic in `scripts/detect_coverage.py` answers three
+independent questions about every consumer project:
 
 - **`cov_in_addopts`** - does any pytest config file
   (`pyproject.toml` `addopts`, `pytest.ini`, `setup.cfg`, `tox.ini`)
@@ -49,13 +60,18 @@ questions about every consumer project:
 - **`coverage_source_configured`** - does the discovered coverage
   config set a non-empty `[tool.coverage.run].source` /
   `[coverage:run] source` / `[run] source`?
+- **`coverage_omit_excludes_install`** - does the discovered
+  coverage config's `omit` list contain a glob whose pattern would
+  match the non-editable install location
+  (`.venv/lib/pythonX.Y/site-packages/<pkg>/`)?
 
 Each signal drives a different decision:
 
-| Signal                       | Decision it drives                                                  |
-|---                           |---                                                                  |
-| `cov_in_addopts`             | Whether the action injects `--cov` itself                           |
-| `coverage_source_configured` | Whether the action emits the "no coverage target configured" warning AND whether the action derives a fallback package name |
+| Signal                            | Decision it drives                                                  |
+|---                                |---                                                                  |
+| `cov_in_addopts`                  | Whether the action injects `--cov` itself                           |
+| `coverage_source_configured`      | Whether the action emits the "no coverage target configured" warning AND whether the action derives a fallback package name |
+| `coverage_omit_excludes_install`  | Whether the action emits the "omit excludes install location" warning (independent of the above; can fire alongside a fully-configured target) |
 
 When `cov_in_addopts=false` (the action will inject `--cov`), the
 form of the injection depends on `coverage_source_configured`:
@@ -70,12 +86,13 @@ form of the injection depends on `coverage_source_configured`:
 
 ## The fixtures
 
-| Fixture                                                  | Layout | `addopts` | `[tool.coverage.run].source` | Action's `--cov` decision |
-|---                                                       |---     |---        |---                           |---                        |
-| [`src-layout-path-source`](./src-layout-path-source/)    | src/   | `--cov=mypkg` | `["src"]`                | NO injection (addopts wins)         |
-| [`src-layout-pkg-source`](./src-layout-pkg-source/)      | src/   | (none)        | `["mypkg"]`              | inject bare `--cov` (source scopes) |
-| [`flat-layout-no-config`](./flat-layout-no-config/)      | flat   | (none)        | (none)                   | inject `--cov=mypkg` (derived)      |
-| [`addopts-cov-only`](./addopts-cov-only/)                | src/   | `--cov=mypkg` | (none)                   | NO injection (addopts wins)         |
+| Fixture                                                  | Layout | `addopts` | `[tool.coverage.run].source` | `[tool.coverage.run].omit` | Action's `--cov` decision           | Warning emitted                          |
+|---                                                       |---     |---        |---                           |---                         |---                                  |---                                       |
+| [`src-layout-path-source`](./src-layout-path-source/)    | src/   | `--cov=mypkg` | `["src"]`                | (clean)                    | NO injection (addopts wins)         | (none)                                   |
+| [`src-layout-pkg-source`](./src-layout-pkg-source/)      | src/   | (none)        | `["mypkg"]`              | (clean)                    | inject bare `--cov` (source scopes) | (none)                                   |
+| [`flat-layout-no-config`](./flat-layout-no-config/)      | flat   | (none)        | (none)                   | (none)                     | inject `--cov=mypkg` (derived)      | "no coverage target configured"          |
+| [`addopts-cov-only`](./addopts-cov-only/)                | src/   | `--cov=mypkg` | (none)                   | (none)                     | NO injection (addopts wins)         | (none)                                   |
+| [`omit-excludes-install`](./omit-excludes-install/)      | src/   | `--cov=mypkg` | `["mypkg"]`              | `["*/.venv/*", "*/tests/*"]` | NO injection (addopts wins)         | "omit excludes install location"         |
 
 ### Why each fixture matters
 
@@ -111,6 +128,26 @@ form of the injection depends on `coverage_source_configured`:
   as `src-layout-path-source` reappears via a different signal).
   The regex deliberately excludes `--cov-report` / `--cov-config` /
   `--cov-fail-under` to avoid false positives.
+
+- **`omit-excludes-install`** mirrors the regression tracked in
+  [`lfreleng-actions/markdown-table-fixer#129`][mtf129] and several
+  sibling consumer PRs. The `source` is the recommended import
+  name and addopts already has `--cov=mypkg`, but `omit` contains
+  `*/.venv/*` - which matches the directory the action's
+  non-editable install puts the package in
+  (`.venv/lib/pythonX.Y/site-packages/mypkg/`). coverage.py
+  honours the omit list and silently masks every measured file,
+  yielding 0% coverage even though `source` and addopts are
+  otherwise correct. The action cannot mechanically fix the
+  consumer's omit list (that would be overreach into project
+  configuration), but `detect_coverage.py` flags the pattern and
+  the action emits a step-summary warning naming the offending
+  glob(s) and the remediation. The `coverage-omit-warning` CI job
+  asserts both the warning text and that the bug IS still
+  reproduced (coverage XML reports 0%), so a future change that
+  silently "fixed" the omit handling would surface here too.
+
+[mtf129]: https://github.com/lfreleng-actions/markdown-table-fixer/pull/129
 
 ## Running fixtures locally
 
