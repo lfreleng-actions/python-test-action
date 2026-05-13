@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Fixture: omit-excludes-install
+#
+# Mirrors the regression seen in
+# lfreleng-actions/markdown-table-fixer (PR #129) and several other
+# downstream consumers: the package-name source is correct, but the
+# omit list excludes the very directory where a non-editable install
+# lives, so coverage refuses to instrument any of the project's
+# files and reports 0% despite all tests passing.
+#
+# Two omit globs cause this:
+#
+#   - '*/venv/*' and '*/.venv/*' match the venv created by setup-uv
+#     under the workspace root (the action's default install layout).
+#   - '*/site-packages/*' is even more aggressive: it excludes the
+#     install location anywhere on disk.
+#
+# The action cannot mechanically fix the consumer's omit list - that
+# would be overreach into project configuration - but it CAN detect
+# the pattern and emit a clear warning that pinpoints the offending
+# entries and the remediation. This fixture exercises that warning
+# path.
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mypkg"
+version = "0.0.0"
+description = "Coverage fixture: omit excludes the install location"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "coverage[toml]>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mypkg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# '--cov=mypkg' on the CLI scopes pytest-cov collection by import
+# name, so this alone is not the failure cause. The failure comes
+# entirely from the omit list below masking everything coverage.py
+# would otherwise have measured.
+addopts = ["-v", "--cov=mypkg"]
+
+[tool.coverage.run]
+# Source is correctly the import name. The pyproject.toml in the
+# original regression had a path-based source ('src/mypkg') AS WELL,
+# but here we isolate the omit-only failure mode so the assertion
+# is unambiguous.
+source = ["mypkg"]
+omit = [
+  "*/tests/*",
+  # The venv pattern is the bug. setup-uv creates the venv at
+  # '.venv' under the workspace root, so a non-editable install
+  # puts the package at '.venv/lib/pythonX.Y/site-packages/mypkg'.
+  # This omit glob matches that path component-by-component and
+  # silently excludes every measured file.
+  "*/.venv/*",
+]
+
+[tool.coverage.report]
+show_missing = true

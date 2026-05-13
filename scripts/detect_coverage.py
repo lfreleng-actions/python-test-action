@@ -152,6 +152,104 @@ def has_cov_in_addopts(project: Path) -> bool:
 # --------------------------------------------------------------------------
 
 
+# Patterns that, when present in [tool.coverage.run].omit, cause
+# coverage.py to refuse to instrument the project's own code under
+# the action's default (non-editable) install layout. The package
+# physically lives at '.venv/lib/pythonX.Y/site-packages/<pkg>/...'
+# under setup-uv's workspace venv, and any omit glob matching that
+# path silently masks all collection. We match by case-insensitive
+# substring rather than parsing the glob: any literal mention of
+# 'venv' or 'site-packages' inside a pattern is sufficient evidence
+# the consumer's omit list and the action's install layout are at
+# odds. The substring approach also catches non-leading variants
+# ('.venv*', '*venv', '*/site-packages*') that a stricter
+# component-level match would miss.
+_OMIT_INSTALL_LOCATION_SUBSTRINGS: tuple[str, ...] = (
+    "venv",
+    "site-packages",
+)
+
+
+def _omit_pattern_excludes_install(pattern: str) -> bool:
+    """Return True iff a single omit glob would mask a non-editable install."""
+    lowered = pattern.lower()
+    return any(sub in lowered for sub in _OMIT_INSTALL_LOCATION_SUBSTRINGS)
+
+
+def problematic_omit_patterns(config_path: Path | None) -> list[str]:
+    """Return omit globs that exclude the non-editable install location.
+
+    Recognises:
+
+        - TOML:   [tool.coverage.run].omit                    (pyproject.toml)
+        - INI:    [coverage:run] omit                         (setup.cfg, tox.ini)
+        - INI:    [run] omit                                  (.coveragerc)
+
+    Returns the offending patterns in declaration order so the
+    action can name them explicitly in the warning it emits.
+    Returns an empty list if no coverage config is in play, the
+    file is unparsable, or every omit pattern is benign.
+
+    This is a conservative heuristic (substring match against
+    'venv' / 'site-packages'); it intentionally errs toward
+    surfacing the warning rather than silently passing a
+    misconfiguration.
+    """
+    if config_path is None or not config_path.is_file():
+        return []
+
+    suffix = config_path.suffix.lower()
+    name = config_path.name.lower()
+
+    def _filter(values: list[str]) -> list[str]:
+        return [v for v in values if _omit_pattern_excludes_install(v)]
+
+    if suffix == ".toml":
+        try:
+            with config_path.open("rb") as fh:
+                data = tomllib.load(fh)
+        except tomllib.TOMLDecodeError:
+            return []
+        omit = data.get("tool", {}).get("coverage", {}).get("run", {}).get("omit")
+        if isinstance(omit, list):
+            return _filter([item for item in omit if isinstance(item, str)])
+        if isinstance(omit, str):
+            return _filter([omit])
+        return []
+
+    # INI form: setup.cfg / tox.ini / .coveragerc.
+    cfg = configparser.ConfigParser(
+        interpolation=None,
+        inline_comment_prefixes=("#", ";"),
+    )
+    try:
+        cfg.read(config_path)
+    except configparser.Error:
+        return []
+    candidate_sections = ("coverage:run", "run")
+    if name == ".coveragerc":
+        candidate_sections = ("run", "coverage:run")
+    for section in candidate_sections:
+        if cfg.has_option(section, "omit"):
+            raw = cfg.get(section, "omit")
+            # INI multi-line values are concatenated with newlines
+            # by configparser, but consumers also occasionally
+            # paste a TOML-style single-line list directly into
+            # an INI section ('omit = ["a", "b"]'). Split on
+            # both separators and strip the punctuation noise so
+            # either spelling decomposes into one entry per
+            # pattern; commas are deliberately removed from the
+            # strip set since we already handled them as a split
+            # delimiter and dropping them again is a no-op.
+            entries: list[str] = []
+            for chunk in re.split(r"[\n,]", raw):
+                cleaned = chunk.translate(str.maketrans("", "", "[]\"'")).strip()
+                if cleaned:
+                    entries.append(cleaned)
+            return _filter(entries)
+    return []
+
+
 def has_nonempty_coverage_source(config_path: Path | None) -> bool:
     """Return True iff the discovered coverage config sets source.
 
@@ -288,6 +386,7 @@ def main(argv: list[str]) -> int:
 
     cov_in_addopts = has_cov_in_addopts(project)
     source_configured = has_nonempty_coverage_source(cov_config)
+    bad_omit_patterns = problematic_omit_patterns(cov_config)
 
     # Inject decision: ONLY suppressed by an existing --cov in
     # addopts. The source list does NOT suppress injection because
@@ -306,6 +405,15 @@ def main(argv: list[str]) -> int:
     if inject_cov and not source_configured:
         fallback_pkg = project_import_name(project)
 
+    # Persist the offending patterns as a ';'-joined string so the
+    # surrounding shell can splat them back into the warning text
+    # without having to re-parse the config. ';' is chosen because
+    # coverage.py glob syntax has no special meaning for it, and
+    # because it survives '$GITHUB_ENV' single-line writes that
+    # newlines would not.
+    omit_excludes_install = bool(bad_omit_patterns)
+    omit_patterns_blob = ";".join(bad_omit_patterns)
+
     out = (
         ("coverage_source_configured", "true" if source_configured else "false"),
         ("cov_in_addopts", "true" if cov_in_addopts else "false"),
@@ -315,6 +423,11 @@ def main(argv: list[str]) -> int:
             "true" if target_configured else "false",
         ),
         ("coverage_fallback_pkg", fallback_pkg),
+        (
+            "coverage_omit_excludes_install",
+            "true" if omit_excludes_install else "false",
+        ),
+        ("coverage_problematic_omit_patterns", omit_patterns_blob),
     )
     for key, value in out:
         print(f"{key}={value}")

@@ -1068,62 +1068,135 @@ runs:
           echo "Coverage collection target detected ✅" \
             "(source=${coverage_source_configured:-false}" \
             "addopts=${cov_in_addopts:-false})"
-          exit 0
-        fi
-
-        # No project-supplied target. Emit a warning to BOTH the
-        # inline console output and $GITHUB_STEP_SUMMARY so users see
-        # it without having to dig into the job log.
-        if [ -n "${coverage_fallback_pkg:-}" ]; then
-          echo "Warning: no coverage collection target configured ⚠️"
-          echo "Will use derived package name" \
-            "'${coverage_fallback_pkg}' as a best-effort fallback."
         else
-          echo "Warning: no coverage collection target configured ⚠️"
-          echo "Could not derive package name; bare '--cov' will be" \
-            "injected (may collect zero data for non-editable" \
-            "installs)."
-        fi
-        echo "Neither pytest addopts nor the coverage config sets" \
-          "a '--cov=<pkg>' or a non-empty" \
-          "'[tool.coverage.run].source' / '[coverage:run] source'."
-        echo "Configure one of the above for predictable results."
+          # No project-supplied target. Emit a warning to BOTH the
+          # inline console output and $GITHUB_STEP_SUMMARY so users see
+          # it without having to dig into the job log.
+          if [ -n "${coverage_fallback_pkg:-}" ]; then
+            echo "Warning: no coverage collection target configured ⚠️"
+            echo "Will use derived package name" \
+              "'${coverage_fallback_pkg}' as a best-effort fallback."
+          else
+            echo "Warning: no coverage collection target configured ⚠️"
+            echo "Could not derive package name; bare '--cov' will be" \
+              "injected (may collect zero data for non-editable" \
+              "installs)."
+          fi
+          echo "Neither pytest addopts nor the coverage config sets" \
+            "a '--cov=<pkg>' or a non-empty" \
+            "'[tool.coverage.run].source' / '[coverage:run] source'."
+          echo "Configure one of the above for predictable results."
 
-        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-          {
-            echo "### ⚠️ Coverage collection target not configured"
-            echo
-            echo "Neither pytest \`addopts\` nor the coverage" \
-              "config sets a \`--cov=<pkg>\` or a non-empty" \
-              "\`[tool.coverage.run].source\` /" \
-              "\`[coverage:run] source\`."
-            echo
-            if [ -n "${coverage_fallback_pkg:-}" ]; then
-              echo "The action will pass" \
-                "\`--cov=${coverage_fallback_pkg}\` (derived from" \
-                "\`[project].name\` in \`pyproject.toml\`) as a" \
-                "best-effort fallback. For predictable results," \
-                "add one of:"
-            else
-              echo "The action will inject a bare \`--cov\` as a" \
-                "best-effort fallback (may collect zero data for" \
-                "non-editable installs). For predictable results," \
-                "add one of:"
-            fi
-            echo
-            echo "- \`--cov=<package>\` to your pytest" \
-              "\`addopts\` (in \`pyproject.toml\`," \
-              "\`pytest.ini\`, \`setup.cfg\`, or \`tox.ini\`)"
-            echo "- \`source = [\"<package>\"]\` under" \
-              "\`[tool.coverage.run]\` in \`pyproject.toml\` (or" \
-              "the equivalent INI form)"
-            echo
-            echo "Prefer the package name over a directory path" \
-              "(e.g. \`[\"mypkg\"]\`, not \`[\"src\"]\`) so that" \
-              "coverage works for both editable and non-editable" \
-              "installs."
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### ⚠️ Coverage collection target not configured"
+              echo
+              echo "Neither pytest \`addopts\` nor the coverage" \
+                "config sets a \`--cov=<pkg>\` or a non-empty" \
+                "\`[tool.coverage.run].source\` /" \
+                "\`[coverage:run] source\`."
+              echo
+              if [ -n "${coverage_fallback_pkg:-}" ]; then
+                echo "The action will pass" \
+                  "\`--cov=${coverage_fallback_pkg}\` (derived from" \
+                  "\`[project].name\` in \`pyproject.toml\`) as a" \
+                  "best-effort fallback. For predictable results," \
+                  "add one of:"
+              else
+                echo "The action will inject a bare \`--cov\` as a" \
+                  "best-effort fallback (may collect zero data for" \
+                  "non-editable installs). For predictable results," \
+                  "add one of:"
+              fi
+              echo
+              echo "- \`--cov=<package>\` to your pytest" \
+                "\`addopts\` (in \`pyproject.toml\`," \
+                "\`pytest.ini\`, \`setup.cfg\`, or \`tox.ini\`)"
+              echo "- \`source = [\"<package>\"]\` under" \
+                "\`[tool.coverage.run]\` in \`pyproject.toml\` (or" \
+                "the equivalent INI form)"
+              echo
+              echo "Prefer the package name over a directory path" \
+                "(e.g. \`[\"mypkg\"]\`, not \`[\"src\"]\`) so that" \
+                "coverage works for both editable and non-editable" \
+                "installs."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        # Independent of the missing-target check above: even a
+        # well-configured 'source' / addopts cannot rescue coverage
+        # when the consumer's '[tool.coverage.run].omit' list
+        # explicitly excludes the directory the non-editable install
+        # lives in. setup-uv places the project under
+        # '.venv/lib/pythonX.Y/site-packages/<pkg>/', so omit globs
+        # like '*/.venv/*' or '*/site-packages/*' silently mask every
+        # measured file and produce the 'No data was collected' /
+        # 0.00% coverage failure seen in issues #138 and related
+        # downstream PRs.
+        #
+        # We only emit this warning when editable=false (the action
+        # default and the install layout that triggers the bug);
+        # editable installs put the package under the original
+        # 'src/<pkg>/' path, which the omit globs never matched in
+        # the first place.
+        if [ "${coverage_omit_excludes_install:-false}" = "true" ] \
+           && [ "${editable_lower:-false}" != "true" ]; then
+          bad_patterns="${coverage_problematic_omit_patterns:-}"
+          echo "Warning: coverage 'omit' excludes the install" \
+            "location ⚠️"
+          echo "Offending pattern(s): $bad_patterns"
+          echo "Under the action's default non-editable install," \
+            "the package lives at" \
+            ".venv/lib/pythonX.Y/site-packages/<pkg>/...; the omit" \
+            "glob(s) above match that path and coverage will" \
+            "report 0% despite tests passing."
+          echo "Remediation: remove the venv / site-packages" \
+            "entries from '[tool.coverage.run].omit' (or the" \
+            "equivalent INI form), or set the action input" \
+            "'editable: true' if you require the omit pattern."
+
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            # Re-format the ';'-joined blob from detect_coverage.py
+            # as a markdown bullet list. Each offending pattern
+            # gets its own line so users can grep step summaries
+            # for the exact value they need to remove.
+            {
+              echo "### ⚠️ Coverage \`omit\` excludes the install location"
+              echo
+              echo "The following \`[tool.coverage.run].omit\`" \
+                "pattern(s) match the directory where the action" \
+                "installs the project, causing coverage.py to" \
+                "silently exclude every measured file:"
+              echo
+              IFS=';' read -r -a _bad_arr <<< "$bad_patterns"
+              for p in "${_bad_arr[@]}"; do
+                [ -n "$p" ] && echo "- \`$p\`"
+              done
+              echo
+              echo "setup-uv places the venv at \`.venv/\` under" \
+                "the workspace root, so a non-editable install" \
+                "resolves to" \
+                "\`.venv/lib/pythonX.Y/site-packages/<pkg>/\`. Any" \
+                "omit glob containing \`venv\` or" \
+                "\`site-packages\` matches that path and produces" \
+                "the \"No data was collected\" / 0% coverage" \
+                "failure tracked in" \
+                "[lfreleng-actions/markdown-table-fixer#129](https://github.com/lfreleng-actions/markdown-table-fixer/pull/129)."
+              echo
+              echo "**Remediation (pick one):**"
+              echo
+              echo "- Remove the offending entries from" \
+                "\`[tool.coverage.run].omit\`. The remaining" \
+                "\`tests/\` / \`__pycache__/\` entries are what" \
+                "actually deserve omitting."
+              echo "- Pass \`editable: true\` to this action; the" \
+                "package then runs from its \`src/\` path and the" \
+                "omit globs no longer match."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
         fi
 
     - name: 'Run tests and coverage report [pytest]'
