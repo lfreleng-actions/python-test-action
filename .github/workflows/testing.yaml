@@ -61,11 +61,11 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Checkout repository"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Perform setup prior to running test(s)
       - name: "Checkout sample project repository"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: "lfreleng-actions/test-python-project"
           path: "test-python-project"
@@ -175,7 +175,7 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Checkout repository"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Run the action under test against the current fixture.
       # 'editable' is left at its default (false) so the package
@@ -293,7 +293,7 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Checkout repository"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Use the same uv-managed interpreter the action itself uses
       # in production. Pinning to env.python_version keeps the unit
@@ -386,7 +386,7 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Checkout repository"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # Run the action against the omit fixture. editable left at
       # its default 'false' - that is the install layout that
@@ -570,12 +570,12 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Checkout repository (action under test)"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           path: "action"
 
       - name: "Checkout python-nss-ng at pinned commit"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: "${{ env.NSS_NG_REPO }}"
           ref: "${{ env.NSS_NG_REF }}"
