@@ -67,6 +67,8 @@ jobs:
 
       - name: "Checkout repository"
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       # Perform setup prior to running test(s)
       - name: "Checkout sample project repository"
@@ -74,6 +76,7 @@ jobs:
         with:
           repository: "lfreleng-actions/test-python-project"
           path: "test-python-project"
+          persist-credentials: false
 
       # Build sample Python project
       - name: "Build Python project"
@@ -181,6 +184,8 @@ jobs:
 
       - name: "Checkout repository"
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       # Run the action under test against the current fixture.
       # 'editable' is left at its default (false) so the package
@@ -299,6 +304,8 @@ jobs:
 
       - name: "Checkout repository"
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       # Use the same uv-managed interpreter the action itself uses
       # in production. Pinning to env.python_version keeps the unit
@@ -318,7 +325,7 @@ jobs:
       # -m pytest' resolves to the same one.
       - name: "Set up uv"
         # yamllint disable-line rule:line-length
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v7.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: ${{ env.python_version }}
           activate-environment: true
@@ -392,6 +399,8 @@ jobs:
 
       - name: "Checkout repository"
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       # Run the action against the omit fixture. editable left at
       # its default 'false' - that is the install layout that
@@ -578,6 +587,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           path: "action"
+          persist-credentials: false
 
       - name: "Checkout python-nss-ng at pinned commit"
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -585,6 +595,7 @@ jobs:
           repository: "${{ env.NSS_NG_REPO }}"
           ref: "${{ env.NSS_NG_REF }}"
           path: "python-nss-ng"
+          persist-credentials: false
 
       - name: "Install NSS/NSPR system dependencies"
         working-directory: "python-nss-ng"

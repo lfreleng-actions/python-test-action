@@ -84,7 +84,11 @@ runs:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
         INPUT_TOX_ENVS: ${{ inputs.tox_envs }}
         INPUT_TESTS_PATH: ${{ inputs.tests_path }}
-      run: |
+      # Values written to GITHUB_ENV in this step are action-internal and
+      # are validated before being written (see the boolean / path / tox
+      # validation guards below); they are env-by-nature, persisted for
+      # consumption by later steps, not untrusted input.
+      run: | # zizmor: ignore[github-env]
         # Setup action/environment
 
         # Helper function to validate boolean inputs (case-insensitive)
@@ -103,10 +107,11 @@ runs:
         }
 
         # Validate all boolean inputs. Read from $INPUT_* env vars
-        # (set on this step) rather than via '${{ inputs.X }}'
-        # expression interpolation - the latter substitutes into the
-        # script source BEFORE bash executes and is the script-source-
-        # injection vector this refactor closes.
+        # (set on this step) rather than interpolating the matching
+        # GitHub Actions inputs.* expressions directly into the
+        # script source. Such expressions are substituted BEFORE
+        # bash executes and are the script-source-injection vector
+        # this refactor closes.
         validation_failed=0
         validate_boolean "editable" "$INPUT_EDITABLE" \
           || validation_failed=1
@@ -281,8 +286,9 @@ runs:
         fi
 
         # Check/setup test path. Read from env vars rather than
-        # '${{ inputs.X }}' interpolation so user-controlled values
-        # cannot break out of the surrounding quoted strings.
+        # interpolating the GitHub Actions inputs.* expressions, so
+        # user-controlled values cannot break out of the surrounding
+        # quoted strings.
         # $INPUT_TESTS_PATH is also constrained: it must not be
         # absolute (we always join it under $path_prefix_input) and
         # must not contain newlines (would corrupt $GITHUB_ENV).
@@ -332,7 +338,10 @@ runs:
         # vector. With env: the value reaches bash as a normal
         # environment variable and quoting is safe.
         INPUT_PYTEST_ARGS: ${{ inputs.pytest_args }}
-      run: |
+      # VALIDATED_PYTEST_ARGS is written to GITHUB_ENV only after the
+      # pytest arguments are validated/sanitised against an allow-list
+      # below, so the env-file write is safe and intentional.
+      run: | # zizmor: ignore[github-env]
         # Validate and sanitize pytest arguments
 
         # Ring-fence this validation from the rest of the environment
@@ -401,7 +410,10 @@ runs:
 
     - name: 'Setup action/environment (continued)'
       shell: bash
-      run: |
+      # UV_EDITABLE_FLAG is a fixed action-internal flag ('-e' or empty)
+      # derived from a validated boolean input; the GITHUB_ENV write is
+      # safe and intentional.
+      run: | # zizmor: ignore[github-env]
         # Setup uv install flags for editable mode
         UV_EDITABLE_FLAG=""
         if [ "f$editable_lower" = 'ftrue' ]; then
@@ -416,7 +428,10 @@ runs:
       shell: bash
       env:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
-      run: |
+      # coverage_config is written to GITHUB_ENV from an action-discovered
+      # configuration path, not untrusted input; the env-file write is
+      # env-by-nature and consumed by later steps.
+      run: | # zizmor: ignore[github-env]
         # Discover or generate coverage configuration
         #
         # coverage.py natively reads configuration from a tiered set of
@@ -445,9 +460,10 @@ runs:
         # setup.cfg-based, tox.ini-based, .coveragerc-based, or none).
         set -euo pipefail
 
-        # Read from $INPUT_PATH_PREFIX (env:) rather than via
-        # '${{ inputs.path_prefix }}' interpolation - quoting is
-        # safe regardless of the value's content.
+        # Read from $INPUT_PATH_PREFIX (env:) rather than
+        # interpolating the GitHub Actions inputs.path_prefix
+        # expression - quoting is safe regardless of the value's
+        # content.
         prefix="$INPUT_PATH_PREFIX"
         coverage_config=""
         coverage_data_file_set="false"
@@ -724,8 +740,9 @@ runs:
 
         # Sanity-check that the interpreter's advertised X.Y matches
         # the version requested via $INPUT_PYTHON_VERSION (passed
-        # through the env: block on this step rather than via
-        # '${{ inputs.python_version }}' interpolation). We accept
+        # through the env: block on this step rather than by
+        # interpolating the GitHub Actions inputs.python_version
+        # expression). We accept
         # any patch level (uv resolves to the latest matching managed
         # build), but the major.minor must agree.
         requested="$INPUT_PYTHON_VERSION"
@@ -743,7 +760,7 @@ runs:
     - name: 'Cache tox environments'
       if: env.tox_tests_lower == 'true'
       # yamllint disable-line rule:line-length
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v4.0.2
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: "${{ inputs.path_prefix }}/.tox"
         # yamllint disable rule:line-length
@@ -807,13 +824,14 @@ runs:
         # action/environment' step has already validated inputs.tox_envs
         # against the same regex BEFORE writing it to $GITHUB_ENV, so by
         # the time we get here the value is known-safe. Using the env
-        # var directly (rather than re-interpolating "${{ env.tox_envs }}"
-        # into the script source) avoids any risk of script-source
-        # injection.
+        # var directly (rather than re-interpolating the GitHub
+        # Actions env.tox_envs expression into the script source)
+        # avoids any risk of script-source injection.
         tox_envs_value="${tox_envs:-}"
         # Read $INPUT_PATH_PREFIX from the env: block on this step
-        # rather than via '${{ inputs.path_prefix }}' interpolation,
-        # so the path can never close the surrounding quoted string.
+        # rather than interpolating the GitHub Actions
+        # inputs.path_prefix expression, so the path can never close
+        # the surrounding quoted string.
         path_prefix_input="$INPUT_PATH_PREFIX"
         if [ -n "$tox_envs_value" ]; then
           # Split on whitespace into an array so each env runs separately.
@@ -877,7 +895,8 @@ runs:
         echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>} 💬"
         echo 'Install project and test/dev dependencies (before pytest install)'
         # Read $INPUT_PATH_PREFIX from the env: block on this step
-        # rather than via '${{ inputs.path_prefix }}' interpolation;
+        # rather than interpolating the GitHub Actions
+        # inputs.path_prefix expression;
         # the earlier 'Setup action/environment' step has already
         # validated the value (rejected absolute paths and control
         # characters) so by the time we get here it is known-safe to
@@ -976,7 +995,10 @@ runs:
       shell: bash
       env:
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
-      run: |
+      # The detect-coverage helper writes already-validated key=value lines
+      # to GITHUB_ENV (the values are checked against a strict regex before
+      # writing); the env-file write is safe and intentional.
+      run: | # zizmor: ignore[github-env]
         # Detect coverage configuration
         #
         # Delegates to scripts/detect_coverage.py which uses tomllib
@@ -1214,8 +1236,9 @@ runs:
         # space-separated string for two reasons:
         #
         #   1. $coverage_config is read from the shell environment at
-        #      runtime (not via "${{ env.coverage_config }}" expression
-        #      interpolation into the script source) so that a path
+        #      runtime (not by interpolating the GitHub Actions
+        #      env.coverage_config expression into the script source)
+        #      so that a path
         #      containing spaces, quotes or shell metacharacters cannot
         #      alter the generated shell script.
         #   2. Array expansion with "${coverage_flags[@]}" preserves
@@ -1284,7 +1307,8 @@ runs:
         fi
 
         # Read tests_path from the runtime shell environment rather
-        # than via "${{ env.tests_path }}" expression interpolation.
+        # than by interpolating the GitHub Actions env.tests_path
+        # expression.
         # tests_path was persisted to $GITHUB_ENV by the setup step
         # after validation, but the value ultimately derives from
         # user-controlled inputs (path_prefix + tests_path); reading
@@ -1304,8 +1328,9 @@ runs:
         # arguments; this is safe because the earlier validation step
         # ensures only well-formed, safe arguments are present.
         # Read $INPUT_PATH_PREFIX from the env: block (validated
-        # earlier) rather than via '${{ inputs.path_prefix }}'
-        # interpolation, and read tests_path from $tests_path which
+        # earlier) rather than interpolating the GitHub Actions
+        # inputs.path_prefix expression, and read tests_path from
+        # $tests_path which
         # the setup step persisted to $GITHUB_ENV after validating
         # the joined path is a real directory. VALIDATED_PYTEST_ARGS
         # is intentionally unquoted to allow word splitting because
