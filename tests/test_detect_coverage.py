@@ -37,7 +37,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import detect_coverage  # noqa: E402
+import detect_coverage
 
 FIXTURES = REPO_ROOT / ".fixtures"
 
@@ -411,7 +411,7 @@ def test_project_import_name_returns_empty_when_missing(tmp_path: Path) -> None:
 @pytest.fixture
 def collect_output(
     capsys: pytest.CaptureFixture[str],
-) -> Iterator["Callable[[Path, Path | None], dict[str, str]]"]:
+) -> Iterator[Callable[[Path, Path | None], dict[str, str]]]:
     """Run ``main()`` against a fixture and return the parsed KEY=VALUE output.
 
     Reading stdout directly via ``capsys`` keeps the test coupled to
@@ -438,7 +438,7 @@ def collect_output(
 
 
 def test_main_emits_all_keys_for_pkg_source_fixture(
-    collect_output: "Callable[[Path, Path | None], dict[str, str]]",
+    collect_output: Callable[[Path, Path | None], dict[str, str]],
 ) -> None:
     """The shipping fixture set is the source of truth for the env-var contract."""
     project = FIXTURES / "src-layout-pkg-source"
@@ -456,7 +456,7 @@ def test_main_emits_all_keys_for_pkg_source_fixture(
 
 
 def test_main_flags_omit_excludes_install_fixture(
-    collect_output: "Callable[[Path, Path | None], dict[str, str]]",
+    collect_output: Callable[[Path, Path | None], dict[str, str]],
 ) -> None:
     """The new fixture must set both the boolean and the patterns blob."""
     project = FIXTURES / "omit-excludes-install"
@@ -472,7 +472,7 @@ def test_main_flags_omit_excludes_install_fixture(
 
 
 def test_main_emits_false_for_omit_signal_in_clean_fixture(
-    collect_output: "Callable[[Path, Path | None], dict[str, str]]",
+    collect_output: Callable[[Path, Path | None], dict[str, str]],
 ) -> None:
     """A clean fixture must report ``false`` and an empty patterns string."""
     project = FIXTURES / "src-layout-pkg-source"
