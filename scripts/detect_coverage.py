@@ -15,6 +15,12 @@ needs to decide:
     '--cov=<pkg>' rather than a bare '--cov' that would collect zero
     data for non-editable installs).
 
+The config-file introspection itself lives in the sibling module
+``coverage_config.py``; this file holds only the decision logic and
+the output contract. The sibling directory is prepended to
+``sys.path`` explicitly below rather than relying on the implicit
+script-directory entry, which safe-path mode suppresses.
+
 It writes KEY=VALUE pairs to stdout for the surrounding shell step
 to forward to ``$GITHUB_ENV``. Stdlib only (tomllib + configparser
 + re), with a 'tomli' fallback for Python <3.11 (the surrounding
@@ -39,333 +45,49 @@ Exit codes:
 
 from __future__ import annotations
 
-import configparser
 import re
 import sys
 from pathlib import Path
 
-# Prefer the stdlib tomllib (Python 3.11+); fall back to the third-
-# party 'tomli' package (the same code that became tomllib) so the
-# script works under the action's setup-uv-managed venv when the
-# consumer requested a pre-3.11 inputs.python_version. The
-# surrounding action.yaml step 'Install project and test/dev
-# dependencies [pytest]' detects this case and 'uv pip install's
-# tomli into the venv before this script runs.
-try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ModuleNotFoundError:
-        print(
-            "Error: detect_coverage.py needs a TOML parser; install "
-            "Python 3.11+ (for stdlib tomllib) or 'tomli' ❌",
-            file=sys.stderr,
-        )
-        sys.exit(2)
+# Python normally puts the script's own directory first on sys.path,
+# but safe-path mode (PYTHONSAFEPATH=1, or 'python -P') suppresses
+# that entry, and a PYTHONPATH entry could otherwise shadow the
+# sibling helper with an unrelated 'coverage_config'. Both are under
+# the consumer's control, since their workflow env reaches this step.
+# Prepend the resolved directory explicitly so the module loaded here
+# is always the one action.yaml just checked for next to this script.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# --------------------------------------------------------------------------
-# --cov token detection
-# --------------------------------------------------------------------------
-
-# Match '--cov' as a bare flag or as '--cov=<value>'. The leading
-# non-word boundary avoids matching '--cov-report' / '--cov-config' /
-# '--cov-fail-under' which all begin with '--cov' but do not
-# configure a collection target. The trailing terminator covers all
-# the ways '--cov' can end inside a config value:
-#
-#   '='   for '--cov=mypkg'
-#   ' '   for '-v --cov ...' (whitespace separator)
-#   '"'   for "'--cov'" / '"--cov"' inside quoted strings
-#   "'"   for the same with single quotes
-#   $     for '--cov' at end-of-line / end-of-string
-_COV_RE = re.compile(r"""(?:^|[^A-Za-z0-9_-])--cov(?:=|\s|['"]|$)""")
-
-
-def _addopts_text(addopts: object) -> str:
-    """Coerce a TOML addopts value to a single string for searching.
-
-    pytest accepts both list-of-strings and string forms; treat both
-    uniformly. Any non-string elements are skipped.
-    """
-    if isinstance(addopts, list):
-        return " ".join(item for item in addopts if isinstance(item, str))
-    if isinstance(addopts, str):
-        return addopts
-    return ""
-
-
-def has_cov_in_addopts(project: Path) -> bool:
-    """Return True iff some pytest config supplies '--cov' in addopts.
-
-    Checked locations, in order (first hit wins):
-
-        - pyproject.toml [tool.pytest.ini_options].addopts
-        - pytest.ini      [pytest].addopts
-        - setup.cfg       [tool:pytest].addopts
-        - tox.ini         [pytest].addopts
-
-    Comments in TOML are stripped natively by the parser; INI
-    comments (both '#' and ';') are stripped by configparser. So a
-    '--cov' mention in a comment never produces a false match.
-    """
-    pyproject = project / "pyproject.toml"
-    if pyproject.is_file():
-        try:
-            with pyproject.open("rb") as fh:
-                data = tomllib.load(fh)
-        except tomllib.TOMLDecodeError:
-            data = {}
-        addopts = (
-            data.get("tool", {}).get("pytest", {}).get("ini_options", {}).get("addopts")
-        )
-        if addopts and _COV_RE.search(_addopts_text(addopts)):
-            return True
-
-    ini_targets = (
-        ("pytest.ini", "pytest"),
-        ("setup.cfg", "tool:pytest"),
-        ("tox.ini", "pytest"),
-    )
-    for filename, section in ini_targets:
-        path = project / filename
-        if not path.is_file():
-            continue
-        cfg = configparser.ConfigParser(
-            interpolation=None,
-            inline_comment_prefixes=("#", ";"),
-        )
-        try:
-            cfg.read(path)
-        except configparser.Error:
-            continue
-        if cfg.has_option(section, "addopts"):
-            value = cfg.get(section, "addopts")
-            if _COV_RE.search(value):
-                return True
-
-    return False
-
-
-# --------------------------------------------------------------------------
-# coverage source list detection
-# --------------------------------------------------------------------------
-
-
-# Patterns that, when present in [tool.coverage.run].omit, cause
-# coverage.py to refuse to instrument the project's own code under
-# the action's default (non-editable) install layout. The package
-# physically lives at '.venv/lib/pythonX.Y/site-packages/<pkg>/...'
-# under setup-uv's workspace venv, and any omit glob matching that
-# path silently masks all collection. We match by case-insensitive
-# substring rather than parsing the glob: any literal mention of
-# 'venv' or 'site-packages' inside a pattern is sufficient evidence
-# the consumer's omit list and the action's install layout are at
-# odds. The substring approach also catches non-leading variants
-# ('.venv*', '*venv', '*/site-packages*') that a stricter
-# component-level match would miss.
-_OMIT_INSTALL_LOCATION_SUBSTRINGS: tuple[str, ...] = (
-    "venv",
-    "site-packages",
+from coverage_config import (
+    has_cov_in_addopts,
+    has_nonempty_coverage_source,
+    problematic_omit_patterns,
+    project_import_name,
 )
 
-
-def _omit_pattern_excludes_install(pattern: str) -> bool:
-    """Return True iff a single omit glob would mask a non-editable install."""
-    lowered = pattern.lower()
-    return any(sub in lowered for sub in _OMIT_INSTALL_LOCATION_SUBSTRINGS)
-
-
-def problematic_omit_patterns(config_path: Path | None) -> list[str]:
-    """Return omit globs that exclude the non-editable install location.
-
-    Recognises:
-
-        - TOML:   [tool.coverage.run].omit                    (pyproject.toml)
-        - INI:    [coverage:run] omit                         (setup.cfg, tox.ini)
-        - INI:    [run] omit                                  (.coveragerc)
-
-    Returns the offending patterns in declaration order so the
-    action can name them explicitly in the warning it emits.
-    Returns an empty list if no coverage config is in play, the
-    file is unparsable, or every omit pattern is benign.
-
-    This is a conservative heuristic (substring match against
-    'venv' / 'site-packages'); it intentionally errs toward
-    surfacing the warning rather than silently passing a
-    misconfiguration.
-    """
-    if config_path is None or not config_path.is_file():
-        return []
-
-    suffix = config_path.suffix.lower()
-    name = config_path.name.lower()
-
-    def _filter(values: list[str]) -> list[str]:
-        return [v for v in values if _omit_pattern_excludes_install(v)]
-
-    if suffix == ".toml":
-        try:
-            with config_path.open("rb") as fh:
-                data = tomllib.load(fh)
-        except tomllib.TOMLDecodeError:
-            return []
-        omit = data.get("tool", {}).get("coverage", {}).get("run", {}).get("omit")
-        if isinstance(omit, list):
-            return _filter([item for item in omit if isinstance(item, str)])
-        if isinstance(omit, str):
-            return _filter([omit])
-        return []
-
-    # INI form: setup.cfg / tox.ini / .coveragerc.
-    cfg = configparser.ConfigParser(
-        interpolation=None,
-        inline_comment_prefixes=("#", ";"),
-    )
-    try:
-        cfg.read(config_path)
-    except configparser.Error:
-        return []
-    candidate_sections = ("coverage:run", "run")
-    if name == ".coveragerc":
-        candidate_sections = ("run", "coverage:run")
-    for section in candidate_sections:
-        if cfg.has_option(section, "omit"):
-            raw = cfg.get(section, "omit")
-            # INI multi-line values are concatenated with newlines
-            # by configparser, but consumers also occasionally
-            # paste a TOML-style single-line list directly into
-            # an INI section ('omit = ["a", "b"]'). Split on
-            # both separators and strip the punctuation noise so
-            # either spelling decomposes into one entry per
-            # pattern; commas are deliberately removed from the
-            # strip set since we already handled them as a split
-            # delimiter and dropping them again is a no-op.
-            entries: list[str] = []
-            for chunk in re.split(r"[\n,]", raw):
-                cleaned = chunk.translate(str.maketrans("", "", "[]\"'")).strip()
-                if cleaned:
-                    entries.append(cleaned)
-            return _filter(entries)
-    return []
+# Control characters must never reach a value this script prints. The
+# surrounding action.yaml step appends our stdout to $GITHUB_ENV
+# verbatim, so a CR or LF inside a value would terminate the intended
+# assignment and start one the consumer chose - BASH_ENV, LD_PRELOAD
+# or similar. That is reachable from a checked-in pyproject.toml,
+# because TOML strings can be multi-line:
+#
+#     [tool.coverage.run]
+#     omit = ["""*/.venv/*
+#     BASH_ENV=/tmp/payload"""]
+#
+# and pyproject.toml is untrusted input whenever this action runs
+# against an unreviewed contribution. Both consumer-derived values
+# ('coverage_fallback_pkg' from [project].name and
+# 'coverage_problematic_omit_patterns' from the omit list) can carry
+# one. Substituting a space rather than deleting keeps the warning
+# text readable and avoids gluing two tokens into one.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 
-def has_nonempty_coverage_source(config_path: Path | None) -> bool:
-    """Return True iff the discovered coverage config sets source.
-
-    Recognises:
-
-        - TOML:   [tool.coverage.run].source        (pyproject.toml)
-        - INI:    [coverage:run] source             (setup.cfg, tox.ini)
-        - INI:    [run] source                      (.coveragerc)
-
-    A source list of '[]' / empty string counts as 'not configured':
-    coverage.py treats those identically to no source set, and the
-    action's missing-target warning should fire in that case so the
-    consumer notices.
-
-    coverage.py also accepts ``source_pkgs`` (a list of importable
-    package names rather than paths). Treat that as a configured
-    source too: if the consumer specified either, they have signalled
-    coverage configuration.
-    """
-    if config_path is None or not config_path.is_file():
-        return False
-
-    suffix = config_path.suffix.lower()
-    name = config_path.name.lower()
-
-    if suffix == ".toml":
-        try:
-            with config_path.open("rb") as fh:
-                data = tomllib.load(fh)
-        except tomllib.TOMLDecodeError:
-            return False
-        run = data.get("tool", {}).get("coverage", {}).get("run", {})
-        for key in ("source", "source_pkgs"):
-            value = run.get(key)
-            if isinstance(value, list) and any(
-                isinstance(item, str) and item.strip() for item in value
-            ):
-                return True
-            if isinstance(value, str) and value.strip():
-                return True
-        return False
-
-    # INI form: setup.cfg / tox.ini / .coveragerc.
-    cfg = configparser.ConfigParser(
-        interpolation=None,
-        inline_comment_prefixes=("#", ";"),
-    )
-    try:
-        cfg.read(config_path)
-    except configparser.Error:
-        return False
-    candidate_sections = (
-        # coverage.py-style (setup.cfg, tox.ini)
-        "coverage:run",
-        # .coveragerc-style
-        "run",
-    )
-    # .coveragerc is by convention coverage's own file; if it has a
-    # bare [run] section that is the coverage one. setup.cfg / tox.ini
-    # use the namespaced [coverage:run] form.
-    if name == ".coveragerc":
-        candidate_sections = ("run", "coverage:run")
-    for section in candidate_sections:
-        for key in ("source", "source_pkgs"):
-            if cfg.has_option(section, key):
-                # configparser collapses INI multi-line values into
-                # one string with newlines; any non-whitespace
-                # content counts as a non-empty value. Strip
-                # brackets, commas, and quotes too so empty-list /
-                # empty-string spellings - 'source = []',
-                # 'source = ""', 'source = \'\'' - count as 'not
-                # configured', matching the TOML branch above and
-                # coverage.py's own treatment of an empty source
-                # list.
-                raw = cfg.get(section, key)
-                stripped = raw.translate(str.maketrans("", "", "[],\"'")).strip()
-                if stripped:
-                    return True
-    return False
-
-
-# --------------------------------------------------------------------------
-# [project].name -> import-name normalisation
-# --------------------------------------------------------------------------
-
-
-def project_import_name(project: Path) -> str:
-    """Derive the conventional import name from [project].name.
-
-    Returns '' if pyproject.toml is missing, malformed, or does not
-    define [project].name.
-
-    Normalisation: lowercase the distribution name, then collapse
-    runs of '-' / '_' / '.' to a single '_'. This is a heuristic
-    (some distributions use a different import name from their
-    distribution name, e.g. 'Pillow' -> 'PIL') but it covers the
-    common case and keeps the fallback wholly local to the action
-    without needing post-install introspection.
-    """
-    pyproject = project / "pyproject.toml"
-    if not pyproject.is_file():
-        return ""
-    try:
-        with pyproject.open("rb") as fh:
-            data = tomllib.load(fh)
-    except tomllib.TOMLDecodeError:
-        return ""
-    name = data.get("project", {}).get("name")
-    if not isinstance(name, str) or not name.strip():
-        return ""
-    return re.sub(r"[-_.]+", "_", name.strip().lower())
-
-
-# --------------------------------------------------------------------------
-# Main
-# --------------------------------------------------------------------------
+def _env_safe(value: str) -> str:
+    """Neutralise characters that could forge an extra $GITHUB_ENV line."""
+    return _CONTROL_CHARS.sub(" ", value)
 
 
 def main(argv: list[str]) -> int:
@@ -375,9 +97,9 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         # 64 is BSD sysexits.h's EX_USAGE - distinct from exit code
-        # 2 (the missing-TOML-parser path above) so callers can
-        # distinguish 'caller bug' from 'environment missing
-        # required dependency'.
+        # 2 (raised by coverage_config when no TOML parser is
+        # available) so callers can distinguish 'caller bug' from
+        # 'environment missing required dependency'.
         return 64
 
     project = Path(argv[1])
@@ -430,7 +152,9 @@ def main(argv: list[str]) -> int:
         ("coverage_problematic_omit_patterns", omit_patterns_blob),
     )
     for key, value in out:
-        print(f"{key}={value}")
+        # Single choke point: every emitted value passes through
+        # _env_safe, so a new consumer-derived field cannot bypass it.
+        print(f"{key}={_env_safe(value)}")
     return 0
 
 
