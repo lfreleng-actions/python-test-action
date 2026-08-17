@@ -1050,11 +1050,22 @@ runs:
 
         prefix="$INPUT_PATH_PREFIX"
         script="$GITHUB_ACTION_PATH/scripts/detect_coverage.py"
+        validator="$GITHUB_ACTION_PATH/scripts/validate_env_lines.sh"
 
-        if [ ! -f "$script" ]; then
-          echo "Error: detect_coverage.py not found at $script ❌" >&2
-          exit 1
-        fi
+        # detect_coverage.py imports its config-parsing helpers from
+        # the sibling coverage_config.py, and its output is screened by
+        # validate_env_lines.sh before reaching $GITHUB_ENV. Check all
+        # three up front so a truncated checkout reports a clear error
+        # rather than a traceback or a skipped security check.
+        for required in \
+          "$script" \
+          "$GITHUB_ACTION_PATH/scripts/coverage_config.py" \
+          "$validator"; do
+          if [ ! -f "$required" ]; then
+            echo "Error: required script not found: $required ❌" >&2
+            exit 1
+          fi
+        done
 
         # Resolve the venv's Python from PATH. setup-uv prepended
         # .venv/bin to PATH and exported VIRTUAL_ENV in an earlier
@@ -1071,9 +1082,16 @@ runs:
         fi
 
         # The script prints KEY=VALUE pairs (one per line) on stdout.
-        # Capture them, log them for diagnostics, and append each line
-        # verbatim to $GITHUB_ENV so subsequent steps see the values.
+        # Capture them, validate them, log them for diagnostics, and
+        # append them to $GITHUB_ENV so subsequent steps see the values.
         env_lines="$("$py" "$script" "$prefix" "${coverage_config:-}")"
+
+        # Screen the output before it reaches the environment file or
+        # the export loop below. See scripts/validate_env_lines.sh for
+        # why this second layer exists; it exits non-zero, and so fails
+        # the step under 'set -e', if anything unexpected appears.
+        printf '%s\n' "$env_lines" | bash "$validator"
+
         printf '%s\n' "$env_lines"
         printf '%s\n' "$env_lines" >> "$GITHUB_ENV"
 
