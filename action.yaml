@@ -621,7 +621,7 @@ runs:
 
     - name: 'Install uv and provision Python'
       # yamllint disable-line rule:line-length
-      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       with:
         # uv is the sole Python provisioner for this action. We do NOT
         # use actions/setup-python alongside it, because doing so caused
