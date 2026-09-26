@@ -65,11 +65,6 @@ jobs:
         with:
           egress-policy: 'audit'
 
-      - name: "Checkout repository"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
       # Perform setup prior to running test(s)
       - name: "Checkout sample project repository"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,7 +88,7 @@ jobs:
 
       # Perform Python project standard tests
       - name: "Run action: ${{ github.repository }} [PYTEST]"
-        uses: ./
+        uses: $/
         with:
           python_version: ${{ env.python_version }}
           path_prefix: "test-python-project"
@@ -102,7 +97,7 @@ jobs:
 
       # Perform Python project failing tests
       - name: "Run action: ${{ github.repository }} [Test Failure]"
-        uses: ./
+        uses: $/
         with:
           python_version: ${{ env.python_version }}
           path_prefix: "test-python-project"
@@ -115,7 +110,7 @@ jobs:
       # Perform Python project failing tests
       - name: "Run action: ${{ github.repository }} [Test Failure]"
         id: tests-fail
-        uses: ./
+        uses: $/
         continue-on-error: true
         with:
           python_version: ${{ env.python_version }}
@@ -192,7 +187,7 @@ jobs:
       # executes from site-packages/ rather than from src/ - this
       # is the install layout that originally exposed issue #138.
       - name: "Run action against fixture: ${{ matrix.fixture }}"
-        uses: ./
+        uses: $/
         with:
           python_version: ${{ env.python_version }}
           path_prefix: ".fixtures/${{ matrix.fixture }}"
@@ -407,7 +402,7 @@ jobs:
       # triggers the regression in real consumers, and the warning
       # only fires for non-editable installs.
       - name: "Run action against fixture: omit-excludes-install"
-        uses: ./
+        uses: $/
         with:
           python_version: ${{ env.python_version }}
           path_prefix: ".fixtures/omit-excludes-install"
@@ -583,12 +578,6 @@ jobs:
         with:
           egress-policy: 'audit'
 
-      - name: "Checkout repository (action under test)"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: "action"
-          persist-credentials: false
-
       - name: "Checkout python-nss-ng at pinned commit"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -673,9 +662,9 @@ jobs:
           artefact_name: "regression-nss-ng-build-${{ matrix.runs-on }}-py${{ matrix.python-version }}"
 
       - name: "Run action: python-nss-ng Py${{ matrix.python-version }}"
-        # Use the local checkout of the action under test rather than
-        # 'uses: ./' at workflow root, since the workflow root holds
-        # python-nss-ng's checkout in this job.
+        # '$/' resolves the action under test from this repository at
+        # the running commit, so no checkout of it is needed; the
+        # workspace holds only python-nss-ng's checkout in this job.
         #
         # PYTHONPATH note: python-nss-ng/test/{test_deprecations,
         # test_secure_logging,test_zzz_nss_context}.py contain bare
@@ -693,7 +682,7 @@ jobs:
         # 'src' rather than at the meson build dir because 'src' is
         # the canonical location and is always present after checkout.
         #
-        uses: ./action
+        uses: $/
         env:
           PYTHONPATH: "${{ github.workspace }}/python-nss-ng/src"
         with:
