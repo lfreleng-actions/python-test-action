@@ -1,0 +1,5 @@
+{
+  "extraPaths": ["scripts"],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "standard"
+}
