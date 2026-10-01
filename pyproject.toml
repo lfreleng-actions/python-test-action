@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Tool configuration only. This repository is a composite action, not
+# a Python package, so it deliberately has no [project] or
+# [build-system] table. The self-tests run from this checkout's root,
+# where setup-uv reads this file looking for a uv version and pytest
+# and coverage.py can read their own tables, so keep [tool.uv],
+# [tool.pytest.ini_options] and [tool.coverage.*] out of it too.
+
+[tool.basedpyright]
+# The oldest Python the action supports, and the lowest leg of the
+# regression matrix. Targeting it keeps the tomli fallback in
+# scripts/coverage_config.py under check.
+pythonVersion = "3.10"
+pythonPlatform = "All"
+typeCheckingMode = "standard"
+# The repository's own Python: the helper scripts and their tests.
+# These are the directories the pre-commit hook passes, so a bare
+# basedpyright run and an editor's language server analyse the same
+# set the hook does.
+include = ["scripts", "tests"]
+# Test data, not code under check: sample projects the tests and the
+# coverage-fixtures job run pytest against.
+exclude = [".fixtures"]
+# The tests import the helpers as top-level modules, putting scripts/
+# on sys.path at runtime as detect_coverage.py does for its sibling.
+extraPaths = ["scripts"]
