@@ -7,6 +7,10 @@ ci:
   skip:
     - gha-workflow-linter
     - aislop
+    # The basedpyright hook environment measures 282 MiB (macOS arm64),
+    # over pre-commit.ci's 250 MiB per-hook limit; its bundled Node.js
+    # runtime alone is 200 MiB. No workflow runs it either, so it is
+    # enforced on local commits only.
     - basedpyright
   autofix_commit_msg: |
     Chore: Pre-commit autofixes
@@ -121,7 +125,11 @@ repos:
     rev: 706e6acebe9e88c2c28d1527d3085a14b11794c4  # frozen: 1.40.1
     hooks:
       - id: basedpyright
-        additional_dependencies: ["pytest", "tomli"]
+        additional_dependencies: ["pytest==9.1.1", "tomli==2.4.1"]
+        pass_filenames: false
+        # Run even on commits that only delete Python files or change config.
+        always_run: true
+        args: [--warnings, scripts, tests]
 
   - repo: https://github.com/lfreleng-actions/gha-workflow-linter
     rev: 0c582e431022f1c7004196fb4ea32744d1fe4843  # frozen: v1.7.0
