@@ -77,7 +77,7 @@ jobs:
       - name: "Build Python project"
         id: build
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/python-build-action@1a1d011cd71e781f9b7896fc9a8c5653406a7758 # v2.1.0
+        uses: lfreleng-actions/python-build-action@3cdb6f8e3b9c6c8fb21cce123f7b873b3620273d # v2.1.1
         with:
           path_prefix: "test-python-project"
           tox_build: false
@@ -646,7 +646,7 @@ jobs:
       # exercises the same end-to-end shape consumers actually use.
       - name: "Build python-nss-ng (meson) Py${{ matrix.python-version }}"
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/python-build-action@1a1d011cd71e781f9b7896fc9a8c5653406a7758 # v2.1.0
+        uses: lfreleng-actions/python-build-action@3cdb6f8e3b9c6c8fb21cce123f7b873b3620273d # v2.1.1
         with:
           path_prefix: "python-nss-ng"
           python_version: "${{ matrix.python-version }}"
