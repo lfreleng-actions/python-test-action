@@ -701,46 +701,38 @@ jobs:
           # Post-test diagnostics
           # Surface enough state to triage interpreter / install /
           # link-time issues without rerunning the job manually.
+          # The action keeps its test environment under
+          # $RUNNER_TEMP/python-test-action/.venv and never puts it on
+          # PATH or VIRTUAL_ENV, so call its interpreter by path.
           echo "=== POST-TEST DIAGNOSTICS ==="
-          echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
-          echo "python on PATH: $(command -v python || true)"
-          if command -v python >/dev/null 2>&1; then
-            python - <<'PY' || true
+          venv="${RUNNER_TEMP}/python-test-action/.venv"
+          py="$venv/bin/python"
+          echo "Caller VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
+          echo "Action venv: $venv"
+          if [ -x "$py" ]; then
+            "$py" - <<'PY' || true
           import sys
           print(f"sys.executable  = {sys.executable}")
           print(f"sys.version     = {sys.version}")
           print(f"sys.prefix      = {sys.prefix}")
           print(f"sys.base_prefix = {sys.base_prefix}")
           PY
+          else
+            echo "No action interpreter at $py"
           fi
-          # The action provisions/activates the venv at workspace root
-          # (.venv), not under path_prefix. Resolve the actual venv via
-          # $VIRTUAL_ENV so this diagnostic reports useful state
-          # regardless of where the action created it.
-          pyvenv_cfg="${VIRTUAL_ENV:+$VIRTUAL_ENV/pyvenv.cfg}"
-          if [ -z "$pyvenv_cfg" ]; then
-            pyvenv_cfg=".venv/pyvenv.cfg"
-          fi
-          if [ -f "$pyvenv_cfg" ]; then
-            echo "---- $pyvenv_cfg ----"
-            cat "$pyvenv_cfg"
+          if [ -f "$venv/pyvenv.cfg" ]; then
+            echo "---- $venv/pyvenv.cfg ----"
+            cat "$venv/pyvenv.cfg"
             echo "----------------------------------------"
           else
-            echo "No pyvenv.cfg found at $pyvenv_cfg"
+            echo "No pyvenv.cfg found at $venv/pyvenv.cfg"
           fi
           echo ""
           echo "=== Installed nss/python-nss-ng artefacts ==="
-          # The action does not install pip into the venv (uv replaces
-          # it), so 'python -m pip' is not always available. Detect
-          # availability first so a missing-pip case produces a
-          # meaningful message rather than masking as a missing package.
-          if command -v python >/dev/null 2>&1; then
-            if python -m pip --version >/dev/null 2>&1; then
-              python -m pip show python-nss-ng || \
-                echo "python-nss-ng not visible to pip"
-            else
-              echo "pip is not available; falling back to importlib"
-              python - <<'PY' || true
+          # uv replaces pip in the action venv, so query the package
+          # metadata through importlib instead.
+          if [ -x "$py" ]; then
+            "$py" - <<'PY' || true
           import importlib.metadata as md
           try:
               dist = md.distribution("python-nss-ng")
@@ -748,7 +740,6 @@ jobs:
           except md.PackageNotFoundError:
               print("python-nss-ng not visible via importlib.metadata")
           PY
-            fi
           fi
           echo ""
           echo "=== ldd of any built nss .so files ==="
@@ -756,3 +747,230 @@ jobs:
             echo "--- $so ---"
             ldd "$so" 2>&1 | grep -E "(nss|nspr|not found)" || true
           done
+
+  ### Caller environment isolation ###
+  #
+  # Plants hostile interpreter selectors and bait executables in the
+  # caller job, runs the action twice (cold, then warm) and checks
+  # that none of the bait ran and that the action left PATH and
+  # VIRTUAL_ENV alone for later steps.
+  #
+  # PYTHONPATH is deliberately not planted: the action keeps it for
+  # pytest so callers can extend the test import path (see the
+  # python-nss-ng regression job), which means bait modules on it
+  # would be imported by design.
+  environment-isolation:
+    name: "Environment isolation (${{ matrix.os }}, ${{ matrix.selector }})"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+        selector:
+          - request
+          - active-environment
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Plant hostile interpreter selectors"
+        shell: bash
+        env:
+          SELECTOR: ${{ matrix.selector }}
+        run: |
+          # Plant hostile interpreter selectors
+          set -euo pipefail
+          ws="$GITHUB_WORKSPACE"
+          marker="$RUNNER_TEMP/isolation-bait-ran"
+          rm -f "$marker"
+          bait() {
+            mkdir -p "$(dirname "$1")"
+            printf '#!/bin/sh\necho "%s $*" >> "%s"\nexit 1\n' \
+              "$1" "$marker" > "$1"
+            chmod +x "$1"
+          }
+          for name in python python3 python3.13 uv; do
+            bait "$ws/.venv/bin/$name"
+          done
+          printf 'home = %s\n' "$ws/.venv/bin" > "$ws/.venv/pyvenv.cfg"
+          mkdir -p "$ws/.venv/conda-meta"
+          bait "$ws/xdg-bin/env"
+          bait "$ws/xdg-bin/bash"
+          for mod in json base64 sitecustomize usercustomize; do
+            printf 'open("%s", "a").write("%s\\n")\nraise SystemExit(1)\n' \
+              "$marker" "$mod" > "$ws/$mod.py"
+          done
+          mkdir -p "$ws/urllib"
+          cp "$ws/json.py" "$ws/urllib/__init__.py"
+          echo "$ws/.venv/bin" >> "$GITHUB_PATH"
+          {
+            echo "PYTHONHOME=$ws/.venv"
+            echo "PYTHONUSERBASE=$ws/.venv"
+            echo "PYTHONSTARTUP=$ws/json.py"
+            echo "PYTHONEXECUTABLE=$ws/.venv/bin/python"
+            echo "__PYVENV_LAUNCHER__=$ws/.venv/bin/python"
+            echo "UV_NO_CACHE=1"
+            echo "UV_PYTHON_ARCH=riscv64"
+            echo "UV_PYTHON_INSTALL_MIRROR=https://127.0.0.1:9"
+            echo "XDG_BIN_HOME=$ws/xdg-bin"
+          } >> "$GITHUB_ENV"
+          case "$SELECTOR" in
+            request)
+              {
+                echo "UV_PYTHON=$ws/.venv/bin/python3.13"
+                echo "UV_PYTHON_SEARCH_PATH=$ws/.venv/bin"
+                echo "UV_PYTHON_INSTALL_DIR=$ws/.venv"
+                echo "UV_PYTHON_PREFERENCE=only-system"
+              } >> "$GITHUB_ENV"
+              ;;
+            active-environment)
+              {
+                echo "VIRTUAL_ENV=$ws/.venv"
+                echo "CONDA_PREFIX=$ws/.venv"
+                echo "CONDA_DEFAULT_ENV=base"
+                echo "UV_INTERNAL__PARENT_INTERPRETER=$ws/.venv/bin/python"
+                echo "UV_INTERNAL__TEST_PYTHON_MANAGED=1"
+                echo "UV_CACHE_DIR=$ws/.venv/cache"
+              } >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Unknown selector: $SELECTOR" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: "Confirm the bait is live"
+        shell: bash
+        run: |
+          # Confirm the bait is live
+          set -euo pipefail
+          marker="$RUNNER_TEMP/isolation-bait-ran"
+          python3 -c 'pass' || true
+          (cd "$GITHUB_WORKSPACE" && /usr/bin/env -u PYTHONHOME \
+            -u PYTHONEXECUTABLE -u __PYVENV_LAUNCHER__ \
+            /usr/bin/python3 -c 'import json') || true
+          if [ ! -f "$marker" ]; then
+            echo "Error: bait did not run; the control is broken ❌"
+            exit 1
+          fi
+          cat "$marker"
+          rm -f "$marker"
+
+      # The verify step compares PATH after the action with this copy,
+      # which already holds the bait entry the planting step added
+      - name: "Record caller PATH"
+        shell: bash
+        run: |
+          # Record caller PATH
+          set -euo pipefail
+          printf '%s\n' "$PATH" > "$RUNNER_TEMP/isolation-caller-path"
+
+      - name: "Run action (cold)"
+        uses: $/
+        with:
+          python_version: "3.13"
+          path_prefix: ".fixtures/src-layout-pkg-source"
+          tests_path: "tests"
+          # yamllint disable-line rule:line-length
+          artefact_name: "isolation-${{ matrix.os }}-${{ matrix.selector }}-cold"
+
+      - name: "Check cold run coverage report"
+        shell: bash
+        run: |
+          # Check cold run coverage report
+          set -euo pipefail
+          xml="${coverage_dir:?}/coverage.xml"
+          if [ ! -s "$xml" ]; then
+            echo "Error: cold run wrote no coverage XML at $xml ❌"
+            exit 1
+          fi
+          rm -f "$xml"
+
+      - name: "Run action (warm)"
+        uses: $/
+        with:
+          python_version: "3.13"
+          path_prefix: ".fixtures/src-layout-pkg-source"
+          tests_path: "tests"
+          # yamllint disable-line rule:line-length
+          artefact_name: "isolation-${{ matrix.os }}-${{ matrix.selector }}-warm"
+
+      - name: "Verify caller environment is untouched"
+        shell: bash
+        env:
+          SELECTOR: ${{ matrix.selector }}
+        run: |
+          # Verify caller environment is untouched
+          set -uo pipefail
+          ws="$GITHUB_WORKSPACE"
+          marker="$RUNNER_TEMP/isolation-bait-ran"
+          rc=0
+          if [ -f "$marker" ]; then
+            echo "Error: bait ran during the action ❌"
+            cat "$marker"
+            rc=1
+          fi
+          IFS=: read -r -a before < "$RUNNER_TEMP/isolation-caller-path"
+          IFS=: read -r -a entries <<< "$PATH"
+          for entry in "${entries[@]}"; do
+            case "$entry" in
+              "$ws/xdg-bin"|"$RUNNER_TEMP"/python-test-action/.venv*)
+                echo "Error: PATH entry leaked: $entry ❌"
+                rc=1
+                continue
+                ;;
+            esac
+            known=false
+            for prior in "${before[@]}"; do
+              if [ "$entry" = "$prior" ]; then
+                known=true
+                break
+              fi
+            done
+            # setup-uv adds its uv, UV_PYTHON_INSTALL_DIR and tool-bin-dir
+            # directories by design; the action names the last two
+            case "$entry" in
+              "$RUNNER_TEMP"/python-test-action/python) known=true ;;
+              "$RUNNER_TEMP"/python-test-action/bin) known=true ;;
+              "${RUNNER_TOOL_CACHE:-}"/uv/*) known=true ;;
+            esac
+            if [ "$known" = false ]; then
+              echo "Error: PATH entry added by the action: $entry ❌"
+              rc=1
+            fi
+          done
+          if [ "$SELECTOR" = "active-environment" ]; then
+            expected="$ws/.venv"
+          else
+            expected=""
+          fi
+          if [ "${VIRTUAL_ENV:-}" != "$expected" ]; then
+            echo "Error: VIRTUAL_ENV changed: '${VIRTUAL_ENV:-}' ❌"
+            rc=1
+          fi
+          if [ ! -s "${coverage_dir:-}/coverage.xml" ]; then
+            echo "Error: warm run wrote no coverage XML ❌"
+            rc=1
+          fi
+          if (cd "$RUNNER_TEMP" && /usr/bin/env -i /usr/bin/python3 -I \
+            -c 'import mypkg') 2>/dev/null; then
+            echo "Error: fixture package leaked into system Python ❌"
+            rc=1
+          fi
+          if [ "$rc" -eq 0 ]; then
+            echo "Caller environment untouched ✅"
+          fi
+          exit "$rc"

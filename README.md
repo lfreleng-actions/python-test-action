@@ -15,14 +15,43 @@ There are two ways for tests to run:
 ## Tooling
 
 The action uses [uv](https://docs.astral.sh/uv/) (a fast, Rust-based Python
-package manager) to install project dependencies, and [uvx][uvx] to run
-`tox` in an ephemeral environment. When invoking tox, the action loads the
+package manager) to install project dependencies. When invoking tox, the
+action installs `tox` into its test environment and loads the
 [`tox-uv`][tox-uv] plugin by default so that tox itself provisions its
 environments through `uv` for faster execution. The action skips `pip`
 bootstrapping entirely.
 
-[uvx]: https://docs.astral.sh/uv/guides/tools/
 [tox-uv]: https://github.com/tox-dev/tox-uv
+
+## Environment Isolation
+
+The action keeps its interpreter and test environment to itself:
+
+- It installs a uv-managed Python matching `python_version` under
+  `$RUNNER_TEMP/python-test-action/python` and creates the test
+  environment at `$RUNNER_TEMP/python-test-action/.venv`, outside the
+  workspace.
+- It calls `uv`, Python, pytest and tox by absolute path. It does not set
+  `VIRTUAL_ENV` or add the test environment to `PATH` for later steps in
+  the calling job. `astral-sh/setup-uv` still adds its own `uv` and tool
+  directories to `PATH`.
+- Caller settings that select an interpreter do not apply to it:
+  `UV_PYTHON*`, `UV_SYSTEM_PYTHON`, `UV_MANAGED_PYTHON`,
+  `UV_PROJECT_ENVIRONMENT`, `VIRTUAL_ENV`, `CONDA_*`, `PYTHONHOME`,
+  `PYTHONEXECUTABLE`, a `.venv` in the workspace, and `python` or `uv`
+  executables earlier on `PATH`.
+- The action trusts the caller's `PATH` itself: the runner and
+  `astral-sh/setup-uv` start `bash`, `tar` and, when the caller sets
+  `UV_NO_MODIFY_PATH`, `uv` from it, so a caller that controls `PATH`
+  controls those tools.
+- pytest runs as the test environment's `pytest` script rather than as
+  `python -m pytest`, so it does not add the working directory to
+  `sys.path`. Variables such as `PYTHONPATH` still reach the tests.
+- The action caches uv downloads with `actions/cache` under
+  `$RUNNER_TEMP/python-test-action/cache`.
+
+A later step that needs the test environment can call
+`$RUNNER_TEMP/python-test-action/.venv/bin/python` directly.
 
 ## python-test-action
 
