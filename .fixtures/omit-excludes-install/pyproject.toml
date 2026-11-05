@@ -12,8 +12,8 @@
 #
 # Two omit globs cause this:
 #
-#   - '*/venv/*' and '*/.venv/*' match the venv created by setup-uv
-#     under the workspace root (the action's default install layout).
+#   - '*/venv/*' and '*/.venv/*' match the venv the action creates
+#     at '$RUNNER_TEMP/python-test-action/.venv' (its install layout).
 #   - '*/site-packages/*' is even more aggressive: it excludes the
 #     install location anywhere on disk.
 #
@@ -59,8 +59,8 @@ addopts = ["-v", "--cov=mypkg"]
 source = ["mypkg"]
 omit = [
   "*/tests/*",
-  # The venv pattern is the bug. setup-uv creates the venv at
-  # '.venv' under the workspace root, so a non-editable install
+  # The venv pattern is the bug. The action creates the venv at
+  # '$RUNNER_TEMP/python-test-action/.venv', so a non-editable install
   # puts the package at '.venv/lib/pythonX.Y/site-packages/mypkg'.
   # This omit glob matches that path component-by-component and
   # silently excludes every measured file.

@@ -619,143 +619,186 @@ runs:
         # Tox configuration file missing
         echo 'Error: tox configuration file missing ❌'; exit 1
 
-    - name: 'Install uv and provision Python'
+    # The action keeps its interpreter, its virtual environment and
+    # uv's state under '$RUNNER_TEMP/python-test-action', and never
+    # activates the environment. Later steps of the calling job keep
+    # the PATH and VIRTUAL_ENV they had, and an earlier step cannot
+    # choose the interpreter the action runs: every uv command names
+    # the action's interpreter by absolute path, and every Python
+    # start uses the environment's interpreter by absolute path.
+    #
+    # setup-uv's only uv call for these inputs is 'uv python find',
+    # whose result it executes. An invalid preference makes uv refuse
+    # its arguments before any lookup; setup-uv then reports the
+    # Python version as 'unknown', which nothing reads. Do not pass
+    # 'python-version' (it exports UV_PYTHON to the caller's later
+    # steps) or 'activate-environment' (it puts the test environment
+    # on the caller's PATH).
+    - name: 'Install uv'
+      id: setup-uv
       # yamllint disable-line rule:line-length
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
       with:
-        # uv is the sole Python provisioner for this action. We do NOT
-        # use actions/setup-python alongside it, because doing so caused
-        # an interpreter / stdlib version skew that segfaulted CPython
-        # at runtime: setup-python installed Python 3.12.13 into the
-        # hostedtoolcache while setup-uv resolved 'python-version: 3.12'
-        # to a different patch (e.g. the system 3.12.3 on Ubuntu noble
-        # or its own python-build-standalone build). The resulting
-        # .venv/bin/python advertised one patch version while loading
-        # stdlib from another, mixing ABIs in a way CPython does not
-        # support.
-        #
-        # UV_PYTHON_PREFERENCE=only-managed (set on every step that
-        # invokes uv/uvx) forces uv to ignore any ambient Python on the
-        # runner and use exclusively a python-build-standalone build
-        # matching inputs.python_version. Combined with
-        # 'activate-environment: true', this gives a single source of
-        # truth: setup-uv downloads (or restores from cache) the
-        # managed interpreter, creates and activates .venv against it,
-        # prepends .venv/bin to PATH, and exports VIRTUAL_ENV. All
-        # subsequent 'uv pip install' calls (without --system) and the
-        # 'python -m pytest' invocation in the test step resolve to
-        # that same interpreter and its site-packages.
-        python-version: "${{ inputs.python_version }}"
-        activate-environment: true
-        enable-cache: true
-        # Scope dependency globs to inputs.path_prefix so monorepos with
-        # multiple Python projects do not invalidate this action's cache
-        # on changes to unrelated subprojects, and so distinct
-        # subprojects do not collide on the same cache key.
-        cache-dependency-glob: |
-          ${{ inputs.path_prefix }}/pyproject.toml
-          ${{ inputs.path_prefix }}/setup.py
-          ${{ inputs.path_prefix }}/setup.cfg
-          ${{ inputs.path_prefix }}/requirements*.txt
-          ${{ inputs.path_prefix }}/uv.lock
-          ${{ inputs.path_prefix }}/tox.ini
+        working-directory: "${{ github.action_path }}"
+        # Without it setup-uv puts the caller's HOME/XDG_* bin dir on PATH
+        tool-bin-dir: "${{ runner.temp }}/python-test-action/bin"
+        # The post-step 'uv cache prune' would hit the invalid
+        # preference; the 'Cache uv downloads' step below caches the
+        # action's own uv cache instead
+        enable-cache: false
       env:
-        UV_PYTHON_PREFERENCE: only-managed
+        UV_NO_CONFIG: '1'
+        UV_NO_PROJECT: '1'
+        UV_PYTHON_PREFERENCE: 'lookup-disabled'
+        # Inherited, it makes setup-uv probe uv, which the line above fails
+        UV_PYTHON_ARCH: ''
+        UV_PYTHON_INSTALL_DIR: "${{ runner.temp }}/python-test-action/python"
+
+    - name: 'Cache uv downloads'
+      # yamllint disable-line rule:line-length
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: "${{ runner.temp }}/python-test-action/cache"
+        # yamllint disable rule:line-length
+        # Scope the key to inputs.path_prefix so monorepos with several
+        # Python projects neither invalidate nor share each other's
+        # entries.
+        key: >-
+          python-test-action-uv-${{ runner.os }}-${{ runner.arch }}-${{ inputs.python_version }}-${{ inputs.path_prefix }}-${{ hashFiles(format('{0}/pyproject.toml', inputs.path_prefix), format('{0}/setup.py', inputs.path_prefix), format('{0}/setup.cfg', inputs.path_prefix), format('{0}/requirements*.txt', inputs.path_prefix), format('{0}/uv.lock', inputs.path_prefix), format('{0}/tox.ini', inputs.path_prefix)) }}
+        restore-keys: |
+          python-test-action-uv-${{ runner.os }}-${{ runner.arch }}-${{ inputs.python_version }}-${{ inputs.path_prefix }}-
+        # yamllint enable rule:line-length
+
+    # The trusted interpreter: uv installs its own python-build-standalone
+    # build of inputs.python_version into the action's directory. uv
+    # runs with an empty environment plus an allow-list, so no caller
+    # variable (PATH, UV_PYTHON*, VIRTUAL_ENV, CONDA_PREFIX, ...) can
+    # pick or redirect the interpreter.
+    #
+    # uv is the sole Python provisioner for this action. Do NOT add
+    # actions/setup-python alongside it: that caused an interpreter /
+    # stdlib version skew that segfaulted CPython at runtime, with a
+    # venv advertising one patch version while loading stdlib from
+    # another.
+    - name: 'Install Python'
+      id: python
+      shell: bash
+      working-directory: "${{ github.action_path }}"
+      env:
+        UV: "${{ steps.setup-uv.outputs.uv-path }}"
+        INSTALL_DIR: "${{ runner.temp }}/python-test-action/python"
+        CACHE_DIR: "${{ runner.temp }}/python-test-action/cache"
+        # Validated against X.Y / X.Y.Z by 'Setup action/environment'
+        INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
+      run: |
+        # Install Python
+        set -euo pipefail
+        clean=(UV_NO_CONFIG=1 UV_NO_PROJECT=1
+          "UV_PYTHON_INSTALL_DIR=$INSTALL_DIR" "UV_CACHE_DIR=$CACHE_DIR")
+        for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy \
+            https_proxy all_proxy no_proxy SSL_CERT_FILE SSL_CERT_DIR \
+            UV_NATIVE_TLS; do
+          if [ -n "${!name+set}" ]; then clean+=("$name=${!name}"); fi
+        done
+        /usr/bin/env -i "${clean[@]}" "$UV" python install --quiet \
+          --no-bin "$INPUT_PYTHON_VERSION"
+        trusted_python=$(/usr/bin/env -i "${clean[@]}" "$UV" python find \
+          --managed-python "$INPUT_PYTHON_VERSION")
+        # uv may print the canonical path, so accept either spelling
+        install_dir_real=$(cd "$INSTALL_DIR" && pwd -P)
+        case "$trusted_python" in
+          "$INSTALL_DIR"/* | "$install_dir_real"/*) ;;
+          *) echo "Error: uv found Python outside its install directory ❌"
+             exit 1 ;;
+        esac
+        echo "Trusted interpreter: $trusted_python 🐍"
+        echo "path=$trusted_python" >> "$GITHUB_OUTPUT"
+
+    # The test environment lives outside the workspace, so the caller's
+    # checkout and later steps never see it. Recreate it on every run:
+    # a job may call the action more than once, with different projects
+    # or Python versions.
+    - name: 'Create test environment'
+      id: venv
+      shell: bash
+      env:
+        UV: "${{ steps.setup-uv.outputs.uv-path }}"
+        UV_CACHE_DIR: "${{ runner.temp }}/python-test-action/cache"
+        TRUSTED_PYTHON: "${{ steps.python.outputs.path }}"
+        ACTION_VENV: "${{ runner.temp }}/python-test-action/.venv"
+      run: |
+        # Create test environment
+        set -euo pipefail
+        # shellcheck disable=SC1091
+        source "$GITHUB_ACTION_PATH/scripts/isolate_interpreter_env.sh"
+        rm -rf "$ACTION_VENV"
+        "$UV" venv --no-config --python "$TRUSTED_PYTHON" "$ACTION_VENV"
+        echo "Test environment: $ACTION_VENV 💬"
+        echo "path=$ACTION_VENV" >> "$GITHUB_OUTPUT"
 
     - name: 'Verify Python interpreter consistency'
       shell: bash
       env:
-        UV_PYTHON_PREFERENCE: only-managed
+        ACTION_VENV: "${{ steps.venv.outputs.path }}"
+        INSTALL_DIR: "${{ runner.temp }}/python-test-action/python"
         INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
       run: |
         # Verify Python interpreter consistency
         # Diagnostic: surface any interpreter/stdlib mismatch immediately
-        # rather than as a downstream segfault. If sys.prefix and
-        # sys.base_prefix disagree with the activated venv, or if the
-        # advertised version does not match inputs.python_version, this
-        # step fails fast with a clear message.
+        # rather than as a downstream segfault. Fail fast if the test
+        # environment's interpreter is not running inside that
+        # environment, is not based on the action's own uv-managed
+        # build, or does not match inputs.python_version.
         set -euo pipefail
+        # macOS reads these even under -I
+        unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__
 
-        echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>}"
-        echo "python on PATH: $(command -v python || true)"
-        echo "uv on PATH: $(command -v uv || true)"
-        echo "uv version: $(uv --version || true)"
-
-        if [ -f .venv/pyvenv.cfg ]; then
-          echo '---- .venv/pyvenv.cfg ----'
-          cat .venv/pyvenv.cfg
+        if [ -f "$ACTION_VENV/pyvenv.cfg" ]; then
+          echo "---- $ACTION_VENV/pyvenv.cfg ----"
+          cat "$ACTION_VENV/pyvenv.cfg"
           echo '--------------------------'
         fi
 
-        python - <<'PY'
+        "$ACTION_VENV/bin/python" -I - \
+          "$ACTION_VENV" "$INSTALL_DIR" "$INPUT_PYTHON_VERSION" <<'PY'
         import os
         import sys
 
+        venv, install_dir, requested = sys.argv[1:4]
         print(f"sys.executable  = {sys.executable}")
         print(f"sys.version     = {sys.version}")
         print(f"sys.prefix      = {sys.prefix}")
         print(f"sys.base_prefix = {sys.base_prefix}")
 
-        # Assert sys.prefix matches the activated venv. uv exports
-        # VIRTUAL_ENV; sys.prefix should resolve to the same path,
-        # otherwise pip-installed packages will land in a different
-        # site-packages from the one 'python -m pytest' will import
-        # from - the exact mismatch this diagnostic step exists to
-        # catch.
-        venv = os.environ.get("VIRTUAL_ENV")
-        if venv:
-            v = os.path.realpath(venv)
-            p = os.path.realpath(sys.prefix)
-            if v != p:
-                print(
-                    f"Error: sys.prefix ({p}) does not match "
-                    f"VIRTUAL_ENV ({v}) ❌",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            # In a venv, sys.base_prefix points at the underlying
-            # managed interpreter and MUST differ from sys.prefix.
-            # Equality means we are running the base interpreter
-            # directly, with no venv isolation.
-            b = os.path.realpath(sys.base_prefix)
-            if b == p:
-                print(
-                    "Error: sys.base_prefix equals sys.prefix; "
-                    "interpreter is not running inside the activated "
-                    "venv ❌",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            print(
-                f"Interpreter prefix OK: sys.prefix matches "
-                f"VIRTUAL_ENV ({v}) ✅"
-            )
-        else:
-            print(
-                "Warning: VIRTUAL_ENV is not set; skipping prefix "
-                "consistency check ⚠️",
-                file=sys.stderr,
-            )
-        PY
+        def fail(message):
+            print(f"Error: {message} ❌", file=sys.stderr)
+            sys.exit(1)
 
-        # Sanity-check that the interpreter's advertised X.Y matches
-        # the version requested via $INPUT_PYTHON_VERSION (passed
-        # through the env: block on this step rather than by
-        # interpolating the GitHub Actions inputs.python_version
-        # expression). We accept
-        # any patch level (uv resolves to the latest matching managed
-        # build), but the major.minor must agree.
-        requested="$INPUT_PYTHON_VERSION"
-        actual="$(python -c \
-          'import sys; print("%d.%d" % sys.version_info[:2])')"
-        req_xy="$(echo "$requested" | awk -F. '{print $1"."$2}')"
-        if [ "$actual" != "$req_xy" ]; then
-          echo "Error: interpreter version mismatch ❌" >&2
-          echo "  requested (X.Y): $req_xy" >&2
-          echo "  actual    (X.Y): $actual" >&2
-          exit 1
-        fi
-        echo "Interpreter version OK: $actual matches requested $req_xy ✅"
+        # sys.prefix must be the test environment, otherwise installs
+        # land in a different site-packages from the one pytest imports.
+        v = os.path.realpath(venv)
+        p = os.path.realpath(sys.prefix)
+        if v != p:
+            fail(f"sys.prefix ({p}) does not match the test environment ({v})")
+        # In a venv, sys.base_prefix points at the underlying managed
+        # interpreter and MUST differ from sys.prefix.
+        b = os.path.realpath(sys.base_prefix)
+        if b == p:
+            fail("sys.base_prefix equals sys.prefix; not running in a venv")
+        root = os.path.realpath(install_dir)
+        if os.path.commonpath([b, root]) != root:
+            fail(f"base interpreter ({b}) is not under {root}")
+        print(f"Interpreter prefix OK: {v} based on {b} ✅")
+
+        # Accept any patch level (uv resolves to the latest matching
+        # managed build), but the major.minor must agree.
+        req_xy = ".".join(requested.split(".")[:2])
+        actual = "%d.%d" % sys.version_info[:2]
+        if actual != req_xy:
+            fail(f"interpreter version mismatch: requested {req_xy}, "
+                 f"actual {actual}")
+        print(f"Interpreter version OK: {actual} matches requested {req_xy} ✅")
+        PY
 
     - name: 'Cache tox environments'
       if: env.tox_tests_lower == 'true'
@@ -788,15 +831,19 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        # Force uvx to use the same managed Python as setup-uv, so tox
-        # (and any tox-managed envs via tox-uv) cannot drift onto a
-        # different ambient interpreter.
-        UV_PYTHON_PREFERENCE: only-managed
+        UV: "${{ steps.setup-uv.outputs.uv-path }}"
+        UV_CACHE_DIR: "${{ runner.temp }}/python-test-action/cache"
+        ACTION_VENV: "${{ steps.venv.outputs.path }}"
         INPUT_PYTHON_VERSION: ${{ inputs.python_version }}
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
-        # Performing tests [tox] using uvx
-        # uvx provisions tox in an ephemeral environment per invocation.
+        # Performing tests [tox]
+        # tox runs from the action's test environment, started by
+        # absolute path, so neither tox nor its interpreter comes from
+        # the caller's PATH or interpreter settings.
+        # shellcheck disable=SC1091
+        source "$GITHUB_ACTION_PATH/scripts/isolate_interpreter_env.sh"
+        venv_python="$ACTION_VENV/bin/python"
         # Under Python 3.8, pin to a compatible tox release; otherwise use
         # latest with tox-uv so tox itself uses uv as its provisioning
         # backend (faster env creation).
@@ -813,11 +860,21 @@ runs:
         py_ver_xy="${py_major}.${py_minor}"
         if [[ "$py_ver_xy" == "3.8" ]]; then
           echo 'Using tox<4.0.0 for Python 3.8 compatibility 💬'
-          tox_cmd=(uvx --python "$py_ver" --from 'tox<4.0.0' tox)
+          tox_packages=('tox<4.0.0')
         else
           echo 'Using latest tox with tox-uv backend 💬'
-          tox_cmd=(uvx --python "$py_ver" --with tox-uv tox)
+          tox_packages=(tox tox-uv)
         fi
+        "$UV" pip install --no-config --python "$venv_python" \
+          "${tox_packages[@]}"
+
+        # Activate the test environment for this step only, as tox ran
+        # before: tox-uv and the test commands find its interpreter
+        # and console scripts first. Nothing reaches $GITHUB_ENV or
+        # $GITHUB_PATH, so later steps of the job are unaffected.
+        export VIRTUAL_ENV="$ACTION_VENV"
+        export PATH="$ACTION_VENV/bin:$PATH"
+        tox_cmd=("$venv_python" -I -m tox)
 
         # Read tox_envs from the shell environment rather than via GitHub
         # Actions expression interpolation. The earlier 'Setup
@@ -850,9 +907,9 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        # Belt-and-braces: keep uv pinned to managed Python so an
-        # ambient interpreter cannot leak in here either.
-        UV_PYTHON_PREFERENCE: only-managed
+        UV: "${{ steps.setup-uv.outputs.uv-path }}"
+        UV_CACHE_DIR: "${{ runner.temp }}/python-test-action/cache"
+        ACTION_VENV: "${{ steps.venv.outputs.path }}"
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Install project and test/dev dependencies via uv
@@ -883,16 +940,15 @@ runs:
         # causing pytest to fail with ModuleNotFoundError on import
         # of the project package.
         #
-        # We deliberately do NOT pass '--system' here. setup-uv has
-        # already provisioned and activated a venv at .venv (PATH is
-        # prepended, VIRTUAL_ENV is exported), so an unqualified
-        # 'uv pip install' targets that venv's interpreter. The same
-        # 'python' resolved on PATH (and the 'python -m pytest' call in
-        # the next step) consequently see the installs without any
-        # interpreter-version arithmetic.
-        PYTHON_BIN="$(command -v python)"
+        # Every install names the test environment's interpreter by
+        # absolute path, so it lands in the site-packages that pytest
+        # imports from in the next step, whatever the caller's PATH,
+        # VIRTUAL_ENV or UV_PYTHON* say.
+        # shellcheck disable=SC1091
+        source "$GITHUB_ACTION_PATH/scripts/isolate_interpreter_env.sh"
+        PYTHON_BIN="$ACTION_VENV/bin/python"
+        uv_pip=("$UV" pip install --no-config --python "$PYTHON_BIN")
         echo "Installing into interpreter: $PYTHON_BIN 💬"
-        echo "Active VIRTUAL_ENV: ${VIRTUAL_ENV:-<unset>} 💬"
         echo 'Install project and test/dev dependencies (before pytest install)'
         # Read $INPUT_PATH_PREFIX from the env: block on this step
         # rather than interpolating the GitHub Actions
@@ -909,15 +965,15 @@ runs:
           # interprets the argument as a package name to download from PyPI.
           # path_prefix_input is validated to be a relative path so the
           # './' prefix is always meaningful and never produces './/abs'.
-          if uv pip install ${UV_EDITABLE_FLAG} \
+          if "${uv_pip[@]}" ${UV_EDITABLE_FLAG} \
           "./${path_prefix_input}[test,dev]"; then
             echo 'Successfully installed test and dev dependencies ✅'
-          elif uv pip install ${UV_EDITABLE_FLAG} \
+          elif "${uv_pip[@]}" ${UV_EDITABLE_FLAG} \
             "./${path_prefix_input}[test]"; then
             echo 'Successfully installed test dependencies ✅'
           else
             echo 'Fallback: installing base package only ⚠️'
-            uv pip install ${UV_EDITABLE_FLAG} \
+            "${uv_pip[@]}" ${UV_EDITABLE_FLAG} \
               "./${path_prefix_input}"
           fi
         elif [ -f "$path_prefix_input/setup.py" ] || \
@@ -939,12 +995,12 @@ runs:
           else
             echo "Source: $path_prefix_input/setup.cfg ⬇️"
           fi
-          uv pip install ${UV_EDITABLE_FLAG} \
+          "${uv_pip[@]}" ${UV_EDITABLE_FLAG} \
             "./${path_prefix_input}"
           if [ -f "$path_prefix_input/requirements.txt" ]; then
             echo "Also installing:" \
               "$path_prefix_input/requirements.txt ⬇️"
-            uv pip install \
+            "${uv_pip[@]}" \
               -r "$path_prefix_input/requirements.txt"
           fi
         elif [ -f "$path_prefix_input/requirements.txt" ]; then
@@ -953,7 +1009,7 @@ runs:
           # a project module will fail. This is the documented
           # behaviour for this branch.
           echo "Source: $path_prefix_input/requirements.txt ⬇️"
-          uv pip install \
+          "${uv_pip[@]}" \
             -r "$path_prefix_input/requirements.txt"
         else
           echo 'Warning: no pyproject.toml, setup.py, setup.cfg or' \
@@ -965,7 +1021,7 @@ runs:
         fi
 
         echo 'Installing: pytest, pytest-cov, coverage[toml] ⬇️'
-        uv pip install -q \
+        "${uv_pip[@]}" -q \
           pytest \
           pytest-cov \
           'coverage[toml]'
@@ -973,7 +1029,7 @@ runs:
         # Verify pytest is importable from the same interpreter that the
         # subsequent 'Run tests' step will use.
         echo 'Verifying pytest is available in the target interpreter ⬇️'
-        "$PYTHON_BIN" -c \
+        "$PYTHON_BIN" -I -c \
           'import pytest; print(f"pytest {pytest.__version__} OK")'
 
         # Ensure 'tomllib' (or its 'tomli' predecessor) is available
@@ -981,19 +1037,20 @@ runs:
         # tomllib joined the stdlib in Python 3.11; for matrix runs that
         # request 3.10 or older, install the back-compat package 'tomli'
         # so the script's import fallback succeeds. We deliberately use
-        # the activated venv's Python (not the runner's stock python3)
+        # the test environment's Python (not the runner's stock python3)
         # to keep the action setup-uv-only - no actions/setup-python
         # coupling that would re-introduce the Ubuntu 24 / Python 3.12
         # ABI skew bug fixed in 6bf3e59.
-        if ! "$PYTHON_BIN" -c 'import tomllib' >/dev/null 2>&1; then
+        if ! "$PYTHON_BIN" -I -c 'import tomllib' >/dev/null 2>&1; then
           echo 'Installing: tomli (tomllib backport for Python <3.11) ⬇️'
-          uv pip install -q tomli
+          "${uv_pip[@]}" -q tomli
         fi
 
     - name: 'Detect coverage configuration'
       if: env.tox_tests_lower != 'true'
       shell: bash
       env:
+        ACTION_VENV: "${{ steps.venv.outputs.path }}"
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       # The detect-coverage helper writes already-validated key=value lines
       # to GITHUB_ENV (the values are checked against a strict regex before
@@ -1040,12 +1097,12 @@ runs:
         # the equivalent inline awk pipeline did not.
         #
         # Runs AFTER 'Install project and test/dev dependencies' so
-        # the activated venv's interpreter is on PATH, matching
-        # inputs.python_version exactly. Running earlier would pick
-        # up whatever python3 is on PATH from sibling actions (e.g. a
-        # python-build-action invocation in our own regression matrix
-        # that uses actions/setup-python), which was the failure mode
-        # in the round-4 CI run.
+        # the test environment's interpreter has tomllib or tomli,
+        # matching inputs.python_version exactly. It is started by
+        # absolute path with -I, never as whatever python3 is on PATH
+        # from sibling actions (e.g. a python-build-action invocation
+        # in our own regression matrix that uses actions/setup-python),
+        # which was the failure mode in the round-4 CI run.
         set -euo pipefail
 
         prefix="$INPUT_PATH_PREFIX"
@@ -1067,24 +1124,19 @@ runs:
           fi
         done
 
-        # Resolve the venv's Python from PATH. setup-uv prepended
-        # .venv/bin to PATH and exported VIRTUAL_ENV in an earlier
-        # step, so 'python' here is the same interpreter that
+        # The test environment's interpreter, the same one that
         # 'Install project and test/dev dependencies' just installed
-        # pytest into and that 'Run tests' will use next. Note that
-        # the prior step's local $PYTHON_BIN does NOT survive into
-        # this step's environment, so we recompute via 'command -v'.
-        py="$(command -v python)"
-        if [ -z "$py" ]; then
-          echo "Error: 'python' not found on PATH; setup-uv" \
-            "should have activated the venv ❌" >&2
-          exit 1
-        fi
+        # into and that 'Run tests' will use next. -I keeps PYTHON*
+        # variables, the working directory and user site-packages out
+        # of sys.path; macOS reads the two variables unset here even
+        # under -I.
+        unset PYTHONEXECUTABLE __PYVENV_LAUNCHER__
+        py="$ACTION_VENV/bin/python"
 
         # The script prints KEY=VALUE pairs (one per line) on stdout.
         # Capture them, validate them, log them for diagnostics, and
         # append them to $GITHUB_ENV so subsequent steps see the values.
-        env_lines="$("$py" "$script" "$prefix" "${coverage_config:-}")"
+        env_lines="$("$py" -I "$script" "$prefix" "${coverage_config:-}")"
 
         # Screen the output before it reaches the environment file or
         # the export loop below. See scripts/validate_env_lines.sh for
@@ -1169,8 +1221,9 @@ runs:
         # well-configured 'source' / addopts cannot rescue coverage
         # when the consumer's '[tool.coverage.run].omit' list
         # explicitly excludes the directory the non-editable install
-        # lives in. setup-uv places the project under
-        # '.venv/lib/pythonX.Y/site-packages/<pkg>/', so omit globs
+        # lives in. The action installs the project under
+        # '$RUNNER_TEMP/python-test-action/.venv/lib/pythonX.Y/
+        # site-packages/<pkg>/', so omit globs
         # like '*/.venv/*' or '*/site-packages/*' silently mask every
         # measured file and produce the 'No data was collected' /
         # 0.00% coverage failure seen in issues #138 and related
@@ -1215,9 +1268,9 @@ runs:
                 [ -n "$p" ] && echo "- \`$p\`"
               done
               echo
-              echo "setup-uv places the venv at \`.venv/\` under" \
-                "the workspace root, so a non-editable install" \
-                "resolves to" \
+              echo "The action creates its venv at" \
+                "\`\$RUNNER_TEMP/python-test-action/.venv/\`, so a" \
+                "non-editable install resolves to" \
                 "\`.venv/lib/pythonX.Y/site-packages/<pkg>/\`. Any" \
                 "omit glob containing \`venv\` or" \
                 "\`site-packages\` matches that path and produces" \
@@ -1244,6 +1297,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        ACTION_VENV: "${{ steps.venv.outputs.path }}"
         INPUT_PATH_PREFIX: ${{ inputs.path_prefix }}
       run: |
         # Tests and coverage report [pytest]
@@ -1334,10 +1388,25 @@ runs:
         # and closes the last script-source-injection vector in this
         # step.
         echo "Running tests in: $tests_path 🧪"
-        # Invoke pytest via 'python -m pytest' rather than the 'pytest'
-        # console script so test execution always uses the interpreter
+        # Run the test environment's 'pytest' console script by
+        # absolute path, so test execution always uses the interpreter
         # that the install step targeted, regardless of which 'pytest'
-        # binary happens to come first on PATH.
+        # or 'python' comes first on the caller's PATH. Unlike
+        # 'python -m pytest', the console script does not put the
+        # working directory (the caller's workspace) on sys.path.
+        #
+        # The tests are the caller's code, so PYTHONPATH and the other
+        # PYTHON* settings that configure them still apply. Only the
+        # variables that redirect the interpreter itself are removed
+        # (macOS reads the last two to pick the executable). The test
+        # environment is activated for this step alone: tests that
+        # start 'python' or a console script of the project find the
+        # environment's first, and nothing reaches $GITHUB_ENV or
+        # $GITHUB_PATH, so later steps of the job are unaffected.
+        unset PYTHONHOME PYTHONEXECUTABLE __PYVENV_LAUNCHER__
+        export VIRTUAL_ENV="$ACTION_VENV"
+        export PATH="$ACTION_VENV/bin:$PATH"
+        pytest_bin="$ACTION_VENV/bin/pytest"
         #
         # coverage_flags is expanded as "${coverage_flags[@]}" so each
         # array element is preserved as a single argument even if a
@@ -1357,13 +1426,13 @@ runs:
         path_prefix_input="$INPUT_PATH_PREFIX"
         if [ "f$permit_fail_lower" = 'ftrue' ]; then
           echo 'Warning: flag set to permit test failures ⚠️'
-          python -m pytest \
+          "$pytest_bin" \
             --rootdir="$path_prefix_input" \
             "${coverage_flags[@]}" \
             ${VALIDATED_PYTEST_ARGS:-} \
             "$tests_path" || true
         else
-          python -m pytest \
+          "$pytest_bin" \
             --rootdir="$path_prefix_input" \
             "${coverage_flags[@]}" \
             ${VALIDATED_PYTEST_ARGS:-} \
