@@ -41,9 +41,12 @@ The action keeps its interpreter and test environment to itself:
   `PYTHONEXECUTABLE`, a `.venv` in the workspace, and `python` or `uv`
   executables earlier on `PATH`.
 - The action trusts the caller's `PATH` itself: the runner and
-  `astral-sh/setup-uv` start `bash`, `tar` and, when the caller sets
-  `UV_NO_MODIFY_PATH`, `uv` from it, so a caller that controls `PATH`
-  controls those tools.
+  `astral-sh/setup-uv` start `bash` and `tar` from it, so a caller that
+  controls `PATH` controls those tools.
+- The action fails at once when the calling job sets
+  `UV_NO_MODIFY_PATH`, to any value. With it set, `astral-sh/setup-uv`
+  would start whichever `uv` comes first on the caller's `PATH`, and a
+  step cannot unset a variable it inherits.
 - pytest runs as the test environment's `pytest` script rather than as
   `python -m pytest`, so it does not add the working directory to
   `sys.path`. Variables such as `PYTHONPATH` still reach the tests.
