@@ -634,6 +634,20 @@ runs:
     # 'python-version' (it exports UV_PYTHON to the caller's later
     # steps) or 'activate-environment' (it puts the test environment
     # on the caller's PATH).
+    #
+    # With UV_NO_MODIFY_PATH set, to any value, setup-uv leaves its own
+    # uv off PATH but still runs a bare 'uv python find', so the
+    # caller's PATH would pick the uv that runs. A step cannot unset a
+    # variable the caller's job sets, so refuse to run instead.
+    - name: 'Refuse an inherited UV_NO_MODIFY_PATH'
+      shell: bash
+      run: |
+        # Refuse an inherited UV_NO_MODIFY_PATH
+        if [[ -n "${UV_NO_MODIFY_PATH+set}" ]]; then
+          echo "::error::Unset UV_NO_MODIFY_PATH before this action"
+          exit 1
+        fi
+
     - name: 'Install uv'
       id: setup-uv
       # yamllint disable-line rule:line-length
