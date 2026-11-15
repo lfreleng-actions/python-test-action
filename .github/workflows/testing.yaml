@@ -523,7 +523,7 @@ jobs:
   #
   # Runs the action against the full python-nss-ng repository across
   # both x64 and arm64 runners and the full supported Python matrix
-  # (3.10 - 3.14). python-nss-ng is one of the more complex Python
+  # (3.11 - 3.14). python-nss-ng is one of the more complex Python
   # projects we exercise: it ships C extensions linking against
   # system NSS/NSPR libraries, builds via meson-python, and historically
   # surfaced two distinct classes of bug in this action that simpler
@@ -558,7 +558,6 @@ jobs:
           - ubuntu-24.04
           - ubuntu-24.04-arm
         python-version:
-          - "3.10"
           - "3.11"
           - "3.12"
           - "3.13"

@@ -29,7 +29,7 @@ build-backend = "hatchling.build"
 name = "mypkg"
 version = "0.0.0"
 description = "Coverage fixture: src layout, package-name source list"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = [
