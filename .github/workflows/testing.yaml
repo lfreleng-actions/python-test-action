@@ -305,10 +305,10 @@ jobs:
       # Use the same uv-managed interpreter the action itself uses
       # in production. Pinning to env.python_version keeps the unit
       # tests on the same Python the rest of this workflow runs
-      # against; the script must work under 3.10-3.14 (and the
-      # tomllib/tomli fallback for the latter) but a single version
-      # is enough to catch logic regressions here - the matrix job
-      # is what guarantees runtime coverage across the version grid.
+      # against; the script must work under 3.11-3.14 but a single
+      # version is enough to catch logic regressions here - the
+      # matrix job is what guarantees runtime coverage across the
+      # version grid.
       #
       # 'activate-environment: true' tells setup-uv to create a
       # venv at .venv/ under the workspace and prepend its bin/
@@ -523,7 +523,7 @@ jobs:
   #
   # Runs the action against the full python-nss-ng repository across
   # both x64 and arm64 runners and the full supported Python matrix
-  # (3.10 - 3.14). python-nss-ng is one of the more complex Python
+  # (3.11 - 3.14). python-nss-ng is one of the more complex Python
   # projects we exercise: it ships C extensions linking against
   # system NSS/NSPR libraries, builds via meson-python, and historically
   # surfaced two distinct classes of bug in this action that simpler
@@ -558,7 +558,6 @@ jobs:
           - ubuntu-24.04
           - ubuntu-24.04-arm
         python-version:
-          - "3.10"
           - "3.11"
           - "3.12"
           - "3.13"
@@ -1057,6 +1056,92 @@ jobs:
         continue-on-error: true
         with:
           python_version: "3.13"
+          path_prefix: ".fixtures/src-layout-pkg-source"
+          tests_path: "tests"
+          report_artefact: false
+
+      - name: "Verify the outcome"
+        shell: bash
+        env:
+          EXPECTED: ${{ matrix.expected }}
+          OUTCOME: ${{ steps.run.outcome }}
+        run: |
+          # Verify the outcome
+          set -uo pipefail
+          rc=0
+          if [ "$OUTCOME" != "$EXPECTED" ]; then
+            echo "Error: action outcome '$OUTCOME', expected '$EXPECTED' ❌"
+            rc=1
+          fi
+          for name in UV_TOOL_BIN_DIR UV_PYTHON_INSTALL_DIR; do
+            if [ "$EXPECTED" = "failure" ] && [ -n "${!name+set}" ]; then
+              echo "Error: $name is set; uv was installed ❌"
+              rc=1
+            elif [ "$EXPECTED" = "success" ] && [ -z "${!name:-}" ]; then
+              echo "Error: $name is unset; the probe is broken ❌"
+              rc=1
+            fi
+          done
+          if [ "$rc" -eq 0 ]; then
+            echo "Outcome '$OUTCOME' as expected ✅"
+          fi
+          exit "$rc"
+
+  ### python_version minimum ###
+  #
+  # The action refuses a python_version below 3.11 in its first step,
+  # before 'Install uv' runs. setup-uv always exports UV_TOOL_BIN_DIR
+  # and UV_PYTHON_INSTALL_DIR to later steps, so neither may be set
+  # after a refusal. The '3.11' leg proves the action proceeds at the
+  # minimum and that this probe is live.
+  python-version-minimum:
+    name: "python_version minimum (${{ matrix.python-version }})"
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            expected: failure
+          - python-version: "3.10.12"
+            expected: failure
+          - python-version: "2.7"
+            expected: failure
+          - python-version: "3.11"
+            expected: success
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Confirm the caller environment"
+        shell: bash
+        run: |
+          # Confirm the caller environment
+          set -euo pipefail
+          for name in UV_TOOL_BIN_DIR UV_PYTHON_INSTALL_DIR; do
+            if [ -n "${!name+set}" ]; then
+              echo "Error: $name is already defined ❌"
+              exit 1
+            fi
+          done
+
+      - name: "Run action"
+        id: run
+        uses: $/
+        continue-on-error: true
+        with:
+          python_version: ${{ matrix.python-version }}
           path_prefix: ".fixtures/src-layout-pkg-source"
           tests_path: "tests"
           report_artefact: false

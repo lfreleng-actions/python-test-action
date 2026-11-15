@@ -31,7 +31,7 @@ build-backend = "hatchling.build"
 name = "mypkg"
 version = "0.0.0"
 description = "Coverage fixture: omit excludes the install location"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = [

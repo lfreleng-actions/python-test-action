@@ -7,42 +7,15 @@ function answers one question about a consumer's checkout and none
 of them decide policy or write output. The decision logic and the
 ``$GITHUB_ENV`` contract live in ``detect_coverage.py``.
 
-Stdlib only (tomllib + configparser + re), with a 'tomli' fallback
-for Python <3.11 (the surrounding action.yaml step ``uv pip
-install``s tomli into the venv when the requested
-``inputs.python_version`` is older than 3.11).
-
-Importing this module exits the process with status 2 when no TOML
-parser is available, since every caller needs one.
+Stdlib only (tomllib + configparser + re).
 """
 
 from __future__ import annotations
 
 import configparser
 import re
-import sys
+import tomllib
 from pathlib import Path
-
-# Prefer the stdlib tomllib (Python 3.11+); fall back to the third-
-# party 'tomli' package (the same code that became tomllib) so the
-# script works under the action's setup-uv-managed venv when the
-# consumer requested a pre-3.11 inputs.python_version. The
-# surrounding action.yaml step 'Install project and test/dev
-# dependencies [pytest]' detects this case and 'uv pip install's
-# tomli into the venv before this script runs.
-try:
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ModuleNotFoundError:
-        print(
-            "Error: detect_coverage.py needs a TOML parser; install "
-            "Python 3.11+ (for stdlib tomllib) or 'tomli' ❌",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
 
 # --------------------------------------------------------------------------
 # TOML table lookup

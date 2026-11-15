@@ -10,7 +10,7 @@ inputs:
   # Mandatory
   python_version:
     # A matrix Python build version should be passed as input
-    description: 'Python version used to run test'
+    description: 'Python version used to run test (3.11 or newer)'
     required: true
     # type: string
   # Optional
@@ -160,6 +160,16 @@ runs:
           echo 'Error: invalid python_version ❌' >&2
           echo "Provided: '$python_version_input'" >&2
           echo "Expected pattern: X.Y or X.Y.Z (digits and dots only)" >&2
+          exit 1
+        fi
+        # Refuse a Python below the supported minimum here, before any
+        # later step installs uv, Python or packages. The base-10
+        # prefix stops bash reading a leading zero ('3.08') as octal.
+        IFS=. read -r py_major py_minor _ <<<"$python_version_input"
+        if (( 10#$py_major < 3 || (10#$py_major == 3 && 10#$py_minor < 11) ))
+        then
+          echo "::error::python_version '$python_version_input' is" \
+            'not supported; the minimum is 3.11 ❌'
           exit 1
         fi
         echo "Using Python: $python_version_input 🐍"
@@ -858,29 +868,11 @@ runs:
         # shellcheck disable=SC1091
         source "$GITHUB_ACTION_PATH/scripts/isolate_interpreter_env.sh"
         venv_python="$ACTION_VENV/bin/python"
-        # Under Python 3.8, pin to a compatible tox release; otherwise use
-        # latest with tox-uv so tox itself uses uv as its provisioning
-        # backend (faster env creation).
-        # The tox-pin decision must compare on major.minor, not the
-        # raw input string. inputs.python_version is now permitted to
-        # be 'X.Y.Z' (validated in the setup step), so a literal '==
-        # "3.8"' check would miss values like '3.8.18' and route them
-        # to the latest-tox branch - which fails because tox>=4 has
-        # dropped Python 3.8 support. Extract the major.minor pair
-        # using bash's built-in IFS-based read (no subshell, no awk
-        # fork) and compare against that.
-        py_ver="$INPUT_PYTHON_VERSION"
-        IFS=. read -r py_major py_minor _ <<<"$py_ver"
-        py_ver_xy="${py_major}.${py_minor}"
-        if [[ "$py_ver_xy" == "3.8" ]]; then
-          echo 'Using tox<4.0.0 for Python 3.8 compatibility 💬'
-          tox_packages=('tox<4.0.0')
-        else
-          echo 'Using latest tox with tox-uv backend 💬'
-          tox_packages=(tox tox-uv)
-        fi
+        # Install current tox with tox-uv, so tox itself uses uv as its
+        # provisioning backend (faster env creation).
+        echo 'Using latest tox with tox-uv backend 💬'
         "$UV" pip install --no-config --python "$venv_python" \
-          "${tox_packages[@]}"
+          tox tox-uv
 
         # Activate the test environment for this step only, as tox ran
         # before: tox-uv and the test commands find its interpreter
@@ -1046,20 +1038,6 @@ runs:
         "$PYTHON_BIN" -I -c \
           'import pytest; print(f"pytest {pytest.__version__} OK")'
 
-        # Ensure 'tomllib' (or its 'tomli' predecessor) is available
-        # in the venv before the next step runs scripts/detect_coverage.py.
-        # tomllib joined the stdlib in Python 3.11; for matrix runs that
-        # request 3.10 or older, install the back-compat package 'tomli'
-        # so the script's import fallback succeeds. We deliberately use
-        # the test environment's Python (not the runner's stock python3)
-        # to keep the action setup-uv-only - no actions/setup-python
-        # coupling that would re-introduce the Ubuntu 24 / Python 3.12
-        # ABI skew bug fixed in 6bf3e59.
-        if ! "$PYTHON_BIN" -I -c 'import tomllib' >/dev/null 2>&1; then
-          echo 'Installing: tomli (tomllib backport for Python <3.11) ⬇️'
-          "${uv_pip[@]}" -q tomli
-        fi
-
     - name: 'Detect coverage configuration'
       if: env.tox_tests_lower != 'true'
       shell: bash
@@ -1072,10 +1050,9 @@ runs:
       run: | # zizmor: ignore[github-env]
         # Detect coverage configuration
         #
-        # Delegates to scripts/detect_coverage.py which uses tomllib
-        # (or its 'tomli' predecessor for Python <3.11) plus stdlib
-        # configparser to answer two independent questions about the
-        # consumer's project:
+        # Delegates to scripts/detect_coverage.py which uses the stdlib
+        # tomllib and configparser to answer two independent questions
+        # about the consumer's project:
         #
         #   - cov_in_addopts:           does any pytest config supply
         #                                '--cov' in addopts?
@@ -1110,9 +1087,9 @@ runs:
         # 21,000-character per-step expression length limit, which
         # the equivalent inline awk pipeline did not.
         #
-        # Runs AFTER 'Install project and test/dev dependencies' so
-        # the test environment's interpreter has tomllib or tomli,
-        # matching inputs.python_version exactly. It is started by
+        # Runs AFTER 'Install project and test/dev dependencies', in
+        # the test environment's interpreter, which matches
+        # inputs.python_version exactly. It is started by
         # absolute path with -I, never as whatever python3 is on PATH
         # from sibling actions (e.g. a python-build-action invocation
         # in our own regression matrix that uses actions/setup-python),

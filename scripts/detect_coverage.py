@@ -23,10 +23,7 @@ script-directory entry, which safe-path mode suppresses.
 
 It writes KEY=VALUE pairs to stdout for the surrounding shell step
 to forward to ``$GITHUB_ENV``. Stdlib only (tomllib + configparser
-+ re), with a 'tomli' fallback for Python <3.11 (the surrounding
-action.yaml step ``uv pip install``s tomli into the venv when the
-requested ``inputs.python_version`` is older than 3.11). The
-script runs under the action's setup-uv-managed venv Python -
++ re). The script runs under the action's setup-uv-managed venv Python -
 the same interpreter that runs pytest in the next step - so
 detection and test runtime see the same import resolution.
 
@@ -39,7 +36,6 @@ discovered; the script handles that gracefully.
 
 Exit codes:
     0   detection completed; KEY=VALUE pairs printed to stdout.
-    2   no TOML parser available (need tomllib >= 3.11 or tomli).
     64  usage error (wrong number of arguments).
 """
 

@@ -95,7 +95,7 @@ Note: build your project before invoking tests (not shown above)
 
 | Variable Name   | Required | Default       | Description                                                               |
 | --------------- | -------- | ------------- | ------------------------------------------------------------------------- |
-| python_version  | True     |               | Python version used to run tests                                          |
+| python_version  | True     |               | Python version used to run tests; 3.11 or newer                           |
 | editable        | False    | False         | Install Python package in editable mode                                   |
 | permit_fail     | False    | False         | Continue even when one or more tests fail                                 |
 | report_artefact | False    | True          | Uploads test/coverage report bundle as artefact                           |
@@ -173,7 +173,7 @@ prevent command injection. You must use safe characters and pytest-compatible fl
 - name: "Test Python project with serial execution"
   uses: lfreleng-actions/python-test-action@main
   with:
-    python_version: "3.10"
+    python_version: "3.11"
     pytest_args: "-n0"  # Disable parallel execution
     report_artefact: true
 ```
@@ -182,7 +182,7 @@ prevent command injection. You must use safe characters and pytest-compatible fl
 - name: "Test Python project with custom arguments"
   uses: lfreleng-actions/python-test-action@main
   with:
-    python_version: "3.10"
+    python_version: "3.11"
     pytest_args: "-v -x --tb=short"  # Three arguments combined
     report_artefact: true
 ```
