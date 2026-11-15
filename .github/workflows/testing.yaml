@@ -305,10 +305,10 @@ jobs:
       # Use the same uv-managed interpreter the action itself uses
       # in production. Pinning to env.python_version keeps the unit
       # tests on the same Python the rest of this workflow runs
-      # against; the script must work under 3.10-3.14 (and the
-      # tomllib/tomli fallback for the latter) but a single version
-      # is enough to catch logic regressions here - the matrix job
-      # is what guarantees runtime coverage across the version grid.
+      # against; the script must work under 3.11-3.14 but a single
+      # version is enough to catch logic regressions here - the
+      # matrix job is what guarantees runtime coverage across the
+      # version grid.
       #
       # 'activate-environment: true' tells setup-uv to create a
       # venv at .venv/ under the workspace and prepend its bin/

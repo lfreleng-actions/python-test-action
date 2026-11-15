@@ -10,9 +10,8 @@
 
 [tool.basedpyright]
 # The oldest Python the action supports, and the lowest leg of the
-# regression matrix. Targeting it keeps the tomli fallback in
-# scripts/coverage_config.py under check.
-pythonVersion = "3.10"
+# regression matrix.
+pythonVersion = "3.11"
 pythonPlatform = "All"
 typeCheckingMode = "standard"
 # The repository's own Python: the helper scripts and their tests.
