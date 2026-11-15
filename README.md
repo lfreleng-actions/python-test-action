@@ -95,7 +95,7 @@ Note: build your project before invoking tests (not shown above)
 
 | Variable Name   | Required | Default       | Description                                                               |
 | --------------- | -------- | ------------- | ------------------------------------------------------------------------- |
-| python_version  | True     |               | Python version used to run tests                                          |
+| python_version  | True     |               | Python version used to run tests; 3.11 or newer                           |
 | editable        | False    | False         | Install Python package in editable mode                                   |
 | permit_fail     | False    | False         | Continue even when one or more tests fail                                 |
 | report_artefact | False    | True          | Uploads test/coverage report bundle as artefact                           |

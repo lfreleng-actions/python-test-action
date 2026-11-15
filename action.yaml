@@ -10,7 +10,7 @@ inputs:
   # Mandatory
   python_version:
     # A matrix Python build version should be passed as input
-    description: 'Python version used to run test'
+    description: 'Python version used to run test (3.11 or newer)'
     required: true
     # type: string
   # Optional
@@ -160,6 +160,16 @@ runs:
           echo 'Error: invalid python_version ❌' >&2
           echo "Provided: '$python_version_input'" >&2
           echo "Expected pattern: X.Y or X.Y.Z (digits and dots only)" >&2
+          exit 1
+        fi
+        # Refuse a Python below the supported minimum here, before any
+        # later step installs uv, Python or packages. The base-10
+        # prefix stops bash reading a leading zero ('3.08') as octal.
+        IFS=. read -r py_major py_minor _ <<<"$python_version_input"
+        if (( 10#$py_major < 3 || (10#$py_major == 3 && 10#$py_minor < 11) ))
+        then
+          echo "::error::python_version '$python_version_input' is" \
+            'not supported; the minimum is 3.11 ❌'
           exit 1
         fi
         echo "Using Python: $python_version_input 🐍"
